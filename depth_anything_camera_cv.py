@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import axengine as axe
 import time
+import traceback
 
 app = FastAPI()
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
@@ -23,20 +24,30 @@ async def root():
     """
 
 def initialize_model(model_path: str):
-    return axe.InferenceSession(model_path)
+    session = axe.InferenceSession(model_path)
+    input_info = session.get_inputs()[0]
+    print("[INFO] Model Input Shape:", input_info.shape)
+    print("[INFO] Model Input Dtype:", input_info.dtype)
+    return session
 
 def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
     if frame is None or frame.size == 0:
         raise ValueError("Empty frame received.")
-    resized_frame = cv2.resize(frame, target_size)
-    rgb_frame = resized_frame[..., ::-1]  # BGR → RGB
-    chw_frame = np.transpose(rgb_frame, (2, 0, 1))  # HWC → CHW
-    input_tensor = np.expand_dims(chw_frame, axis=0).astype(np.uint8)  # (1, 3, H, W)
-    return input_tensor
+
+    resized = cv2.resize(frame, target_size)
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    if MODEL_PATH.endswith(".axmodel"):
+        tensor = np.expand_dims(rgb, axis=0).astype(np.uint8)  # NHWC uint8 for axmodel
+        if tensor.nbytes % np.dtype(np.uint8).itemsize != 0:
+            raise ValueError("[ERROR] Tensor buffer size not aligned with dtype")
+        return tensor
+    rgb = rgb.astype(np.float32) / 255.0
+    chw = np.transpose(rgb, (2, 0, 1))
+    return np.expand_dims(chw, axis=0)
 
 def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
     depth_feature = depth_map.reshape(depth_map.shape[-2:])
-    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min())
+    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min() + 1e-6)
     depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
     depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
     return depth_resized
@@ -47,7 +58,7 @@ def detect_navigation_direction(depth_map: np.ndarray, threshold: float = 1.5):
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(free_space)
 
     if num_labels <= 1:
-        return None  # 自由空間なし
+        return None
 
     largest_area = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
     cx, cy = centroids[largest_area]
@@ -57,56 +68,82 @@ def visualize_navigation(original_frame: np.ndarray, direction_point):
     vis_frame = original_frame.copy()
     h, w = vis_frame.shape[:2]
 
-    cx, cy = direction_point
-    cx = np.clip(cx, 0, w - 1)
-    cy = np.clip(cy, 0, h - 1)
+    if direction_point is None:
+        return vis_frame
 
-    center = (w // 2, h)
-    cv2.arrowedLine(vis_frame, center, (cx, cy), (0, 255, 0), 3, tipLength=0.2)
-    cv2.circle(vis_frame, (cx, cy), 6, (0, 0, 255), -1)
-    cv2.putText(vis_frame, f\"Direction: ({cx}, {cy})\", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cx, cy = direction_point
+    cx = int(np.clip(cx, 0, w - 1))
+    cy = int(np.clip(cy, 0, h - 1))
+
+    center = (w // 2, h - 1)
+    try:
+        cv2.arrowedLine(vis_frame, center, (cx, cy), (0, 255, 0), 3, tipLength=0.2)
+        cv2.circle(vis_frame, (cx, cy), 6, (0, 0, 255), -1)
+        cv2.putText(vis_frame, f"Direction: ({cx}, {cy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    except Exception as e:
+        print(f"[WARN] Visualization failed: {e}")
 
     return vis_frame
 
-
 def get_video_stream():
     session = initialize_model(MODEL_PATH)
-    input_name = session.get_inputs()[0].name
+    input_info = session.get_inputs()[0]
+    input_name = input_info.name
+
     camera = cv2.VideoCapture(0)
 
     try:
         while True:
+            if not camera.isOpened():
+                print("[WARN] Camera not open. Reinitializing...")
+                camera.release()
+                time.sleep(0.5)
+                camera = cv2.VideoCapture(0)
+                continue
+
             success, frame = camera.read()
             if not success or frame is None:
-                print("Failed to read frame.")
-                continue  # skip this frame
+                print("[WARN] Frame read failed")
+                continue
 
             try:
                 input_tensor = process_frame(frame)
-                depth_output = session.run(None, {input_name: input_tensor})[0]
-                depth_output = depth_output.squeeze()
+                if input_tensor is None or input_tensor.size == 0:
+                    print("[WARN] Empty input_tensor")
+                    continue
+                print(f"[INFO] Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
+
+                try:
+                    depth_output_raw = session.run(None, {input_name: input_tensor})
+                except Exception as e:
+                    print("[ERROR] AX run failed:", e)
+                    traceback.print_exc()
+                    continue
+
+                if not depth_output_raw or not isinstance(depth_output_raw[0], np.ndarray):
+                    print("[ERROR] Invalid output from model")
+                    continue
+                depth_output = depth_output_raw[0].squeeze()
+
+                if depth_output.ndim != 2:
+                    print(f"[ERROR] Unexpected depth output shape: {depth_output.shape}")
+                    continue
+
             except Exception as e:
                 print(f"[ERROR] Processing frame failed: {e}")
-                continue  # skip to next frame
-
-            # 残りの可視化・描画処理はそのまま
+                traceback.print_exc()
+                continue
 
             depth_vis = create_depth_visualization(depth_output, frame)
-
             direction_point = detect_navigation_direction(depth_output)
-            if direction_point:
-                nav_vis = visualize_navigation(frame, direction_point)
-            else:
-                nav_vis = frame
+            nav_vis = visualize_navigation(frame, direction_point)
 
             combined_vis = np.concatenate([nav_vis, depth_vis], axis=1)
-
             _, buffer = cv2.imencode('.jpg', combined_vis)
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
             time.sleep(0.005)
-
     finally:
         camera.release()
 

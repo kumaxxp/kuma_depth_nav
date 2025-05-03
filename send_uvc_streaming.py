@@ -28,7 +28,7 @@ async def root():
 
 
 
-def resize_frame(frame: np.ndarray, width: int = 320, height: int = 240) -> np.ndarray:
+def resize_frame(frame: np.ndarray, width: int = 640, height: int = 480) -> np.ndarray:
     return cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
 
 def get_video_stream() -> Generator[bytes, None, None]:
