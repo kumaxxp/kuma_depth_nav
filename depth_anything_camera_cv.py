@@ -26,8 +26,13 @@ def initialize_model(model_path: str):
     return axe.InferenceSession(model_path)
 
 def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
+    if frame is None or frame.size == 0:
+        raise ValueError("Empty frame received.")
     resized_frame = cv2.resize(frame, target_size)
-    return np.expand_dims(resized_frame[..., ::-1], axis=0)
+    rgb_frame = resized_frame[..., ::-1]  # BGR → RGB
+    chw_frame = np.transpose(rgb_frame, (2, 0, 1))  # HWC → CHW
+    input_tensor = np.expand_dims(chw_frame, axis=0).astype(np.uint8)  # (1, 3, H, W)
+    return input_tensor
 
 def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
     depth_feature = depth_map.reshape(depth_map.shape[-2:])
@@ -36,19 +41,8 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
     depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
     return depth_resized
 
-
-def visualize_navigation(original_frame: np.ndarray, direction_point):
-    vis_frame = original_frame.copy()
-    h, w = vis_frame.shape[:2]
-
-    # 中心から進行方向へ矢印を描画
-    cv2.arrowedLine(vis_frame, (w//2, h), direction_point, (0, 255, 0), 5)
-    cv2.circle(vis_frame, direction_point, 8, (255, 0, 0), -1)
-    return vis_frame
-
 def detect_navigation_direction(depth_map: np.ndarray, threshold: float = 1.5):
-    depth_map = depth_map.squeeze()  # 不要な次元を削除 (1, 1, H, W) -> (H, W)
-
+    depth_map = depth_map.squeeze()
     free_space = (depth_map > threshold).astype(np.uint8)
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(free_space)
 
@@ -59,6 +53,21 @@ def detect_navigation_direction(depth_map: np.ndarray, threshold: float = 1.5):
     cx, cy = centroids[largest_area]
     return int(cx), int(cy)
 
+def visualize_navigation(original_frame: np.ndarray, direction_point):
+    vis_frame = original_frame.copy()
+    h, w = vis_frame.shape[:2]
+
+    cx, cy = direction_point
+    cx = np.clip(cx, 0, w - 1)
+    cy = np.clip(cy, 0, h - 1)
+
+    center = (w // 2, h)
+    cv2.arrowedLine(vis_frame, center, (cx, cy), (0, 255, 0), 3, tipLength=0.2)
+    cv2.circle(vis_frame, (cx, cy), 6, (0, 0, 255), -1)
+    cv2.putText(vis_frame, f\"Direction: ({cx}, {cy})\", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    return vis_frame
+
 
 def get_video_stream():
     session = initialize_model(MODEL_PATH)
@@ -68,26 +77,27 @@ def get_video_stream():
     try:
         while True:
             success, frame = camera.read()
-            if not success:
-                break
+            if not success or frame is None:
+                print("Failed to read frame.")
+                continue  # skip this frame
 
-            input_tensor = process_frame(frame)
-            depth_output = session.run(None, {input_name: input_tensor})[0]
-            depth_output = depth_output.squeeze()  # 追加（重要！）
+            try:
+                input_tensor = process_frame(frame)
+                depth_output = session.run(None, {input_name: input_tensor})[0]
+                depth_output = depth_output.squeeze()
+            except Exception as e:
+                print(f"[ERROR] Processing frame failed: {e}")
+                continue  # skip to next frame
 
-            # 形状を確認
-            print("Depth Output shape:", depth_output.shape)
+            # 残りの可視化・描画処理はそのまま
 
             depth_vis = create_depth_visualization(depth_output, frame)
 
-            direction_point = detect_navigation_direction(depth_output, threshold=50)  # 整数値に調整
+            direction_point = detect_navigation_direction(depth_output)
             if direction_point:
                 nav_vis = visualize_navigation(frame, direction_point)
             else:
                 nav_vis = frame
-
-            # shape確認（結合前）
-            print("nav_vis shape:", nav_vis.shape, "depth_vis shape:", depth_vis.shape)
 
             combined_vis = np.concatenate([nav_vis, depth_vis], axis=1)
 
