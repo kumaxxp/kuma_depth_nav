@@ -6,6 +6,7 @@
 depth_occupancy_mapping.pyで使用するための深度画像をキャプチャするためのツール。
 カメラからの深度データをキャプチャして保存します。
 Linux環境に対応。WebインターフェースでSSH環境でも使用可能。
+Depth Anythingモデルによる実際の深度推論にも対応。
 """
 
 import numpy as np
@@ -22,6 +23,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse
 import uvicorn
 
+# Depth Anythingモデル用にaxengineをインポート（存在する場合）
+try:
+    import axengine as axe
+    AXENGINE_AVAILABLE = True
+    print("[情報] axengineが利用可能です。Depth Anythingモデルを使用できます。")
+except ImportError:
+    AXENGINE_AVAILABLE = False
+    print("[警告] axengineがインストールされていません。合成深度のみ使用できます。")
+
 # FastAPIアプリケーションの初期化
 app = FastAPI()
 
@@ -35,6 +45,14 @@ stop_event = threading.Event()
 frame_count = 0
 output_dir = "depth_captures"
 depth_pattern = "objects"
+depth_mode = "synthetic"  # "synthetic" または "model"
+depth_model = None
+depth_model_input_name = None
+depth_processing_count = 0
+depth_error_count = 0
+
+# モデルパスのデフォルト値
+DEFAULT_MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
 
 def initialize_camera(index=0, width=320, height=240):
     """カメラを初期化する"""
@@ -66,19 +84,98 @@ def camera_capture_frame(camera):
     success, frame = camera.retrieve()
     return success, frame
 
-def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
+def initialize_depth_model(model_path):
+    """Depth Anythingモデルを初期化する"""
+    global depth_model, depth_model_input_name
+    
+    if not AXENGINE_AVAILABLE:
+        print("[エラー] axengineがインストールされていないため、モデルを初期化できません")
+        return False
+        
+    try:
+        print(f"[情報] モデルを読み込み中: {model_path}")
+        if not os.path.exists(model_path):
+            print(f"[エラー] モデルファイルが見つかりません: {model_path}")
+            return False
+            
+        # axengineのバージョンに応じて適切な初期化方法を試す
+        try:
+            # オプションを使用した初期化（新しいバージョン向け）
+            options = {}
+            options["axe.input_layout"] = "NHWC"  # 入力レイアウトを明示
+            options["axe.output_layout"] = "NHWC" # 出力レイアウトを明示
+            options["axe.use_dsp"] = "true"       # DSP使用を有効化
+            
+            depth_model = axe.InferenceSession(model_path, options)
+        except TypeError:
+            # オプションなしで初期化（古いバージョン向け）
+            print("[情報] 基本的なモデル初期化にフォールバックします")
+            depth_model = axe.InferenceSession(model_path)
+            
+        # モデル情報を表示
+        inputs = depth_model.get_inputs()
+        outputs = depth_model.get_outputs()
+        print(f"[情報] モデル入力: {[x.name for x in inputs]}")
+        print(f"[情報] モデル入力シェイプ: {[x.shape for x in inputs]}")
+        print(f"[情報] モデル出力: {[x.name for x in outputs]}")
+        print(f"[情報] モデル出力シェイプ: {[x.shape for x in outputs]}")
+        
+        if inputs:
+            depth_model_input_name = inputs[0].name
+            print(f"[情報] 使用するモデル入力名: {depth_model_input_name}")
+            
+        print("[情報] 深度モデルが正常に読み込まれました")
+        return True
+    except Exception as e:
+        print(f"[エラー] モデル初期化に失敗しました: {e}")
+        traceback.print_exc()
+        return False
+
+def process_for_depth(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
     """フレームを処理してモデル入力用に準備する"""
-    if frame is None or frame.size == 0:
-        raise ValueError("空のフレームが入力されました。")
+    try:
+        if frame is None:
+            print("[エラー] 入力フレームがNoneです")
+            return None
+            
+        resized = cv2.resize(frame, target_size)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        tensor = np.expand_dims(rgb, axis=0).astype(np.uint8)  # NHWC uint8
+        
+        return tensor
+    except Exception as e:
+        print(f"[エラー] 深度用フレーム処理に失敗しました: {e}")
+        return None
+
+def run_depth_inference(frame):
+    """モデルを使用して深度推論を実行する"""
+    global depth_model, depth_model_input_name, depth_error_count
     
-    resized = cv2.resize(frame, target_size)
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    
-    # 常にNHWCフォーマットのuint8テンソルを返す
-    tensor = np.expand_dims(rgb, axis=0).astype(np.uint8)  # NHWC uint8
-    if tensor.nbytes % np.dtype(np.uint8).itemsize != 0:
-        raise ValueError("[エラー] テンソルバッファサイズがデータ型と一致しません")
-    return tensor
+    if depth_model is None or depth_model_input_name is None:
+        return None
+        
+    try:
+        # フレーム前処理
+        input_tensor = process_for_depth(frame)
+        if input_tensor is None:
+            return None
+            
+        # 深度推論実行
+        start_time = time.time()
+        outputs = depth_model.run(None, {depth_model_input_name: input_tensor})
+        inference_time = (time.time() - start_time) * 1000  # ミリ秒に変換
+        print(f"[情報] 深度推論時間: {inference_time:.1f}ms")
+        
+        if outputs is None or len(outputs) == 0:
+            print("[エラー] モデルが出力を返しませんでした")
+            return None
+            
+        return outputs[0]  # 最初の出力を返す
+    except Exception as e:
+        depth_error_count += 1
+        print(f"[エラー] 深度推論中にエラーが発生しました: {e}")
+        traceback.print_exc()
+        return None
 
 def create_synthetic_depth(frame, pattern="random"):
     """
@@ -229,7 +326,8 @@ def save_depth_data(frame, depth_map, timestamp, output_dir):
 
 # カメラスレッド関数
 def camera_thread_function(camera_index, width, height, pattern):
-    global latest_frame, latest_depth, frame_count, depth_pattern
+    global latest_frame, latest_depth, frame_count, depth_pattern, depth_mode
+    global depth_processing_count, depth_error_count
     
     depth_pattern = pattern
     camera = initialize_camera(camera_index, width, height)
@@ -248,23 +346,44 @@ def camera_thread_function(camera_index, width, height, pattern):
                 time.sleep(0.1)
                 continue
             
-            # フレームからの合成深度マップを作成
-            depth_map = create_synthetic_depth(frame, depth_pattern)
-            
-            # 最新フレームと深度を更新（スレッドセーフに）
+            # 最新フレームを更新（スレッドセーフに）
             with frame_lock:
                 latest_frame = frame.copy()
-            
-            with depth_lock:
-                latest_depth = depth_map.copy()
                 
+            # 深度モードに応じた処理
+            if depth_mode == "synthetic":
+                # 合成深度マップを作成
+                depth_map = create_synthetic_depth(frame, depth_pattern)
+                
+                # 最新深度を更新
+                with depth_lock:
+                    latest_depth = depth_map.copy()
+            
+            elif depth_mode == "model" and depth_model is not None:
+                # モデルによる深度推論（必要に応じて頻度を減らす）
+                if frame_count % 3 == 0:  # 3フレームに1回処理
+                    depth_output = run_depth_inference(frame)
+                    
+                    if depth_output is not None:
+                        # 深度マップを更新
+                        with depth_lock:
+                            latest_depth = depth_output
+                        depth_processing_count += 1
+            
             # カウンター更新
             frame_count += 1
             
             # キャプチャイベントが設定されていたら画像を保存
             if capture_event.is_set():
                 timestamp = int(time.time() * 1000)
-                save_depth_data(frame, depth_map, timestamp, output_dir)
+                # 最新の深度マップを取得
+                current_depth = None
+                with depth_lock:
+                    if latest_depth is not None:
+                        current_depth = latest_depth.copy()
+                
+                if current_depth is not None:
+                    save_depth_data(frame, current_depth, timestamp, output_dir)
                 capture_event.clear()
                 
             # フレームレート制御
@@ -282,7 +401,7 @@ def camera_thread_function(camera_index, width, height, pattern):
 
 # ストリーミング用のジェネレーター関数
 def generate_frames():
-    global latest_frame, latest_depth, frame_count
+    global latest_frame, latest_depth, frame_count, depth_mode, depth_processing_count
     
     empty_frame = np.zeros((240, 320, 3), dtype=np.uint8)
     
@@ -316,16 +435,28 @@ def generate_frames():
             # 表示用の画像を作成
             display_img = np.hstack([current_frame, depth_vis])
             
-            # フレーム番号を追加
+            # フレーム番号と深度モードを追加
             cv2.putText(
                 display_img, 
-                f"Frame: {frame_count}", 
+                f"Frame: {frame_count}  Mode: {depth_mode.capitalize()}", 
                 (10, 40), 
                 cv2.FONT_HERSHEY_SIMPLEX, 
                 0.5, 
                 (255, 255, 255), 
                 1
             )
+            
+            # モデル使用時は処理フレーム数も表示
+            if depth_mode == "model":
+                cv2.putText(
+                    display_img,
+                    f"Processed: {depth_processing_count}", 
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1
+                )
             
             # JPEGエンコードしてストリーミング
             ret, buffer = cv2.imencode('.jpg', display_img)
@@ -391,6 +522,15 @@ async def root():
                 button:hover {
                     background-color: #45a049;
                 }
+                button.active {
+                    background-color: #2E7D32;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                }
+                button.disabled {
+                    background-color: #cccccc;
+                    color: #666666;
+                    cursor: not-allowed;
+                }
                 select {
                     padding: 8px 12px;
                     margin: 8px 0;
@@ -402,6 +542,16 @@ async def root():
                     font-weight: bold;
                     margin: 10px 0;
                 }
+                .control-group {
+                    margin: 10px 0;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    flex-wrap: wrap;
+                }
+                .control-group > * {
+                    margin: 0 5px;
+                }
             </style>
         </head>
         <body>
@@ -411,9 +561,13 @@ async def root():
                     <img src="/video_feed" width="100%" />
                 </div>
                 <div class="controls">
-                    <button onclick="captureImage()">画像キャプチャ</button>
-                    <div>
-                        <label for="pattern">深度パターン:</label>
+                    <div class="control-group">
+                        <button onclick="captureImage()">画像キャプチャ</button>
+                        <button id="synthetic-btn" onclick="changeMode('synthetic')" class="active">合成深度</button>
+                        <button id="model-btn" onclick="changeMode('model')">モデル深度</button>
+                    </div>
+                    <div class="control-group">
+                        <label for="pattern">合成深度パターン:</label>
                         <select id="pattern" onchange="changePattern()">
                             <option value="objects">物体</option>
                             <option value="gradient">グラデーション</option>
@@ -458,6 +612,32 @@ async def root():
                             document.getElementById('status').textContent = 'エラー: ' + error;
                         });
                 }
+                
+                // モード変更関数
+                function changeMode(mode) {
+                    document.getElementById('status').textContent = '深度モード変更中...';
+                    fetch('/change_mode?mode=' + mode)
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById('status').textContent = data.message;
+                            
+                            // ボタンのアクティブ状態を更新
+                            document.getElementById('synthetic-btn').className = 
+                                mode === 'synthetic' ? 'active' : '';
+                            document.getElementById('model-btn').className = 
+                                mode === 'model' ? 'active' : '';
+                                
+                            // パターン選択の有効/無効を切り替え
+                            document.getElementById('pattern').disabled = (mode === 'model');
+                            
+                            setTimeout(() => {
+                                document.getElementById('status').textContent = '';
+                            }, 3000);
+                        })
+                        .catch(error => {
+                            document.getElementById('status').textContent = 'エラー: ' + error;
+                        });
+                }
             </script>
         </body>
     </html>
@@ -482,9 +662,25 @@ async def change_pattern(pattern: str):
     else:
         return {"message": "無効なパターンです"}
 
+@app.get("/change_mode")
+async def change_mode(mode: str):
+    global depth_mode
+    
+    if mode == "model" and not AXENGINE_AVAILABLE:
+        return {"message": "axengineが利用できないため、モデル深度モードは使用できません"}
+        
+    if mode == "model" and depth_model is None:
+        return {"message": "深度モデルが初期化されていないため、モデル深度モードは使用できません"}
+        
+    if mode in ["synthetic", "model"]:
+        depth_mode = mode
+        return {"message": f"深度モードを {mode} に変更しました"}
+    else:
+        return {"message": "無効なモードです"}
+
 def depth_capture_main():
     """メインの深度キャプチャ関数"""
-    global output_dir, depth_pattern
+    global output_dir, depth_pattern, depth_mode, depth_model
     
     parser = argparse.ArgumentParser(description='深度画像キャプチャツール')
     parser.add_argument('--camera', type=int, default=0, help='使用するカメラのインデックス')
@@ -495,15 +691,29 @@ def depth_capture_main():
                         help='合成深度パターン (random, gradient, objects, grayscale)')
     parser.add_argument('--port', type=int, default=8080, help='Webサーバーポート')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Webサーバーホスト')
+    parser.add_argument('--model', type=str, default=DEFAULT_MODEL_PATH, help='Depth Anythingモデルのパス')
+    parser.add_argument('--mode', type=str, default='synthetic', choices=['synthetic', 'model'],
+                        help='深度モード (synthetic: 合成深度, model: モデル深度)')
     
     args = parser.parse_args()
     
     # グローバル変数の設定
     output_dir = args.output
     depth_pattern = args.pattern
+    depth_mode = args.mode
     
     # 出力ディレクトリを作成
     os.makedirs(output_dir, exist_ok=True)
+    
+    # モード指定がmodelの場合、モデル初期化を試みる
+    if args.mode == 'model' and AXENGINE_AVAILABLE:
+        model_init_success = initialize_depth_model(args.model)
+        if not model_init_success:
+            print("[警告] モデル初期化に失敗しました。合成深度モードにフォールバックします。")
+            depth_mode = 'synthetic'
+    elif args.mode == 'model' and not AXENGINE_AVAILABLE:
+        print("[警告] axengineが利用できないため、合成深度モードにフォールバックします。")
+        depth_mode = 'synthetic'
     
     # Linuxシステムリソースの最適化（send_uvc_streaming_depthから参考）
     try:
@@ -518,6 +728,7 @@ def depth_capture_main():
     print(f"カメラインデックス: {args.camera}")
     print(f"解像度: {args.width}x{args.height}")
     print(f"出力ディレクトリ: {args.output}")
+    print(f"深度モード: {depth_mode}")
     print(f"合成深度パターン: {args.pattern}")
     print(f"Webサーバー: http://{args.host}:{args.port}")
     print("==============================")
