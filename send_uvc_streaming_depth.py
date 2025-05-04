@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import queue
 import os
 import threading
+import collections  # パフォーマンス測定用のdequeを使用するため
 
 app = FastAPI()
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
@@ -21,6 +22,55 @@ depth_lock = threading.Lock()
 # デバッグ情報用
 depth_processing_count = 0
 depth_error_count = 0
+
+# パフォーマンス測定用の変数
+perf_timings = {
+    'camera_capture': collections.deque(maxlen=50),  # 5秒間のデータ（10FPS想定）
+    'depth_inference': collections.deque(maxlen=50), 
+    'visualization': collections.deque(maxlen=50),
+    'stream_processing': collections.deque(maxlen=150)  # ストリーミングは30FPS想定
+}
+perf_lock = threading.Lock()
+last_perf_report_time = time.time()
+
+# パフォーマンス記録用デコレータ
+def time_it(timing_key):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = func(*args, **kwargs)
+            elapsed = (time.time() - start_time) * 1000  # ミリ秒に変換
+            with perf_lock:
+                perf_timings[timing_key].append(elapsed)
+            return result
+        return wrapper
+    return decorator
+
+# パフォーマンスレポートを出力する関数
+def report_performance():
+    global last_perf_report_time
+    current_time = time.time()
+    
+    # 5秒ごとにレポートを出力
+    if current_time - last_perf_report_time >= 5.0:
+        with perf_lock:
+            report = []
+            report.append("\n===== パフォーマンス レポート (ms) =====")
+            
+            for key, timings in perf_timings.items():
+                if timings:
+                    avg = sum(timings) / len(timings)
+                    min_val = min(timings)
+                    max_val = max(timings)
+                    count = len(timings)
+                    fps = 1000 / avg if avg > 0 else 0
+                    report.append(f"{key}: 平均={avg:.2f}, 最小={min_val:.2f}, 最大={max_val:.2f}, " +
+                                 f"サンプル={count}, FPS={fps:.1f}")
+                else:
+                    report.append(f"{key}: データなし")
+            
+            print("\n".join(report))
+            last_perf_report_time = current_time
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -196,6 +246,15 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
         traceback.print_exc()
         return original_frame
 
+@time_it('camera_capture')
+def camera_capture_frame(camera):
+    """カメラフレームをキャプチャする関数"""
+    # バッファから古いフレームを捨てる
+    for _ in range(3):
+        camera.grab()
+    success, frame = camera.retrieve()
+    return success, frame
+
 # カメラ画像を連続的に取得するスレッド関数
 def camera_thread():
     global latest_frame
@@ -203,10 +262,7 @@ def camera_thread():
     
     try:
         while True:
-            # バッファから古いフレームを捨てる
-            for _ in range(3):
-                camera.grab()
-            success, frame = camera.retrieve()
+            success, frame = camera_capture_frame(camera)
             if not success or frame is None:
                 time.sleep(0.01)
                 continue
@@ -215,10 +271,23 @@ def camera_thread():
             with frame_lock:
                 latest_frame = frame.copy()
             
+            # パフォーマンスレポート
+            report_performance()
+            
             # カメラのフレームレート制御のための短い待機
             time.sleep(0.01)
     finally:
         camera.release()
+
+@time_it('depth_inference')
+def run_depth_inference(model, input_name, input_tensor):
+    """深度推論を実行する関数"""
+    return model.run(None, {input_name: input_tensor})
+
+@time_it('visualization')
+def visualize_depth(output, current_frame):
+    """深度マップを可視化する関数"""
+    return create_depth_visualization_ori(output, current_frame)
 
 # 深度推論を行うスレッド関数
 def depth_processing_thread():
@@ -257,19 +326,16 @@ def depth_processing_thread():
                     input_tensor = process_for_depth(current_frame)
                     
                     if input_tensor is not None:
-                        #print(f"[DEBUG] Running inference with tensor shape {input_tensor.shape}")
-                        start_time = time.time()
-                        outputs = model.run(None, {input_name: input_tensor})
+                        # 深度推論実行
+                        outputs = run_depth_inference(model, input_name, input_tensor)
                         
                         if outputs is None or len(outputs) == 0:
                             print("[ERROR] Model returned no outputs")
                         else:
                             output = outputs[0]
-                        #    print(f"[DEBUG] Inference complete in {time.time()-start_time:.2f}s, "
-                        #          f"output shape={output.shape}, type={output.dtype}")
                             
-                            #depth_vis = create_depth_visualization(output, current_frame)
-                            depth_vis = create_depth_visualization_ori(output, current_frame)
+                            # 深度の可視化
+                            depth_vis = visualize_depth(output, current_frame)
                             
                             # 深度マップを更新（スレッドセーフに）
                             with depth_lock:
@@ -281,6 +347,9 @@ def depth_processing_thread():
                     else:
                         print("[ERROR] Failed to prepare input tensor")
                         depth_error_count += 1
+                        
+                # パフォーマンスレポート
+                report_performance()
                         
                 # 処理間隔を調整（必要に応じて）
                 time.sleep(0.1)  # 深度処理は10FPS程度で十分
@@ -303,52 +372,61 @@ def depth_processing_thread():
         import traceback
         traceback.print_exc()
 
-# ストリーミング用のジェネレーター関数
-def get_video_stream():
+@time_it('stream_processing')
+def process_stream_frame():
+    """ストリーミング用のフレームを生成する関数"""
     global latest_frame, latest_depth
     empty_frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    
+    # 最新のカメラフレームと深度マップを取得（スレッドセーフに）
+    current_frame = None
+    current_depth = None
+    
+    with frame_lock:
+        if latest_frame is not None:
+            current_frame = latest_frame.copy()
+    
+    with depth_lock:
+        if latest_depth is not None:
+            current_depth = latest_depth.copy()
+    
+    # カメラフレームがない場合は空のフレーム
+    if current_frame is None:
+        current_frame = empty_frame
+        
+    # 深度マップがない場合はグレースケールのプレースホルダー
+    if current_depth is None:
+        current_depth = np.zeros_like(current_frame)
+        # 「DEPTH PROCESSING...」テキストを表示
+        cv2.putText(
+            current_depth, 
+            "DEPTH PROCESSING...", 
+            (10, 120), 
+            cv2.FONT_HERSHEY_SIMPLEX, 
+            0.7, 
+            (255, 255, 255), 
+            2
+        )
+        
+    # フレームを並べて表示
+    # 小さいサイズを使用してパフォーマンス向上
+    combined = np.hstack([
+        cv2.resize(current_frame, (320, 240)), 
+        cv2.resize(current_depth, (320, 240))
+    ])
+    
+    return combined
+
+# ストリーミング用のジェネレーター関数
+def get_video_stream():
     frame_count = 0
     
     try:
         while True:
             start_time = time.time()
             
-            # 最新のカメラフレームと深度マップを取得（スレッドセーフに）
-            current_frame = None
-            current_depth = None
-            
-            with frame_lock:
-                if latest_frame is not None:
-                    current_frame = latest_frame.copy()
-            
-            with depth_lock:
-                if latest_depth is not None:
-                    current_depth = latest_depth.copy()
-            
-            # カメラフレームがない場合は空のフレーム
-            if current_frame is None:
-                current_frame = empty_frame
-                
-            # 深度マップがない場合はグレースケールのプレースホルダー
-            if current_depth is None:
-                current_depth = np.zeros_like(current_frame)
-                # 「DEPTH PROCESSING...」テキストを表示
-                cv2.putText(
-                    current_depth, 
-                    "DEPTH PROCESSING...", 
-                    (10, 120), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.7, 
-                    (255, 255, 255), 
-                    2
-                )
-                
-            # フレームを並べて表示
-            # 小さいサイズを使用してパフォーマンス向上
-            combined = np.hstack([
-                cv2.resize(current_frame, (320, 240)), 
-                cv2.resize(current_depth, (320, 240))
-            ])
+            # ストリームフレームを生成
+            combined = process_stream_frame()
             
             # フレーム番号を追加
             frame_count += 1
@@ -362,10 +440,27 @@ def get_video_stream():
                 1
             )
             
+            # パフォーマンス情報を表示
+            with perf_lock:
+                if 'depth_inference' in perf_timings and perf_timings['depth_inference']:
+                    avg_inf = sum(perf_timings['depth_inference']) / len(perf_timings['depth_inference'])
+                    cv2.putText(
+                        combined, 
+                        f"Inf: {avg_inf:.1f}ms", 
+                        (10, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.5, 
+                        (255, 255, 255), 
+                        1
+                    )
+            
             ret, buffer = cv2.imencode('.jpg', combined)
             if ret:
                 yield (b'--frame\r\n'
                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                
+            # パフォーマンスレポート
+            report_performance()
                       
             # 処理時間計測とフレームレート調整
             process_time = time.time() - start_time
