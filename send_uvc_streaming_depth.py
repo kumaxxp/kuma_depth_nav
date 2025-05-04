@@ -41,15 +41,26 @@ def initialize_camera(index=0, width=320, height=240):  # 解像度を下げる
     return cam
 
 def initialize_model(model_path: str):
-    # AXENGINEの最適化設定を追加
-    options = {}
-    options["axe.input_layout"] = "NHWC"  # 入力レイアウトを明示
-    options["axe.output_layout"] = "NHWC" # 出力レイアウトを明示
-    options["axe.use_dsp"] = "true"       # DSP使用を有効化
-    
-    session = axe.InferenceSession(model_path, options)
-    print("[INFO] Depth model loaded with optimizations")
-    return session
+    try:
+        # axengineのバージョンに応じて適切な初期化方法を試す
+        try:
+            # オプションを使用した初期化（新しいバージョン向け）
+            options = {}
+            options["axe.input_layout"] = "NHWC"  # 入力レイアウトを明示
+            options["axe.output_layout"] = "NHWC" # 出力レイアウトを明示
+            options["axe.use_dsp"] = "true"       # DSP使用を有効化
+            
+            session = axe.InferenceSession(model_path, options)
+        except TypeError:
+            # オプションなしで初期化（古いバージョン向け）
+            print("[INFO] Falling back to basic model initialization")
+            session = axe.InferenceSession(model_path)
+            
+        print("[INFO] Depth model loaded successfully")
+        return session
+    except Exception as e:
+        print(f"[ERROR] Model initialization failed: {e}")
+        raise
 
 def process_for_depth(frame: np.ndarray, target_size=(256, 192)) -> np.ndarray:  # サイズ縮小
     resized = cv2.resize(frame, target_size)
@@ -95,13 +106,13 @@ def camera_thread():
 # 深度推論を行うスレッド関数
 def depth_processing_thread():
     global latest_depth, latest_frame
-    model = initialize_model(MODEL_PATH)
-    input_name = model.get_inputs()[0].name
-    
-    # 前回処理したフレームを記録
-    last_processed_frame = None
-    
     try:
+        model = initialize_model(MODEL_PATH)
+        input_name = model.get_inputs()[0].name
+        
+        # 前回処理したフレームを記録
+        last_processed_frame = None
+        
         while True:
             current_frame = None
             
