@@ -8,9 +8,16 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import os
+import threading
 
 app = FastAPI()
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
+
+# グローバル変数として最新のカメラフレームと深度マップを保持
+latest_frame = None
+latest_depth = None
+frame_lock = threading.Lock()
+depth_lock = threading.Lock()
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -61,31 +68,11 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
     resized_original = cv2.resize(original_frame, (depth_colored.shape[1], depth_colored.shape[0]))
     return depth_colored  # 元のサイズに戻さない（表示時にリサイズ）
 
-def get_video_stream():
+# カメラ画像を連続的に取得するスレッド関数
+def camera_thread():
+    global latest_frame
     camera = initialize_camera()
-    model = initialize_model(MODEL_PATH)
-    input_name = model.get_inputs()[0].name
     
-    # 並列処理用のキューとエグゼキューター
-    frame_queue = queue.Queue(maxsize=2)
-    result_queue = queue.Queue(maxsize=2)
-    executor = ThreadPoolExecutor(max_workers=1)
-    
-    def process_depth_async(input_frame):
-        try:
-            input_tensor = process_for_depth(input_frame)
-            output = model.run(None, {input_name: input_tensor})[0]
-            depth_vis = create_depth_visualization(output, input_frame)
-            return depth_vis
-        except Exception as e:
-            print(f"[ERROR] Depth processing failed: {e}")
-            return input_frame
-    
-    # フレームスキップを有効化して処理負荷を軽減
-    frame_skip = 3  # より多くスキップ
-    frame_count = 0
-    
-    # 初期フレーム取得
     try:
         while True:
             # バッファから古いフレームを捨てる
@@ -95,51 +82,98 @@ def get_video_stream():
             if not success or frame is None:
                 time.sleep(0.01)
                 continue
+                
+            # 最新フレームを更新（スレッドセーフに）
+            with frame_lock:
+                latest_frame = frame.copy()
             
-            # フレームスキップ処理
-            frame_count += 1
-            if frame_count % frame_skip != 0:
-                # 軽量な処理だけ行ってJPEGを返す
-                ret, buffer = cv2.imencode('.jpg', frame)
-                if ret:
-                    yield (b'--frame\r\n'
-                          b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                continue
-                
-            # 非同期で深度処理を実行
-            if frame_queue.qsize() < 2:
-                frame_queue.put(frame)
-                future = executor.submit(process_depth_async, frame.copy())
-                
-                # 前の結果が利用可能なら表示
-                try:
-                    if not result_queue.empty():
-                        depth_vis = result_queue.get(block=False)
-                        # 小さいサイズを使用してパフォーマンス向上
-                        combined = np.hstack([cv2.resize(frame, (320, 240)), 
-                                             cv2.resize(depth_vis, (320, 240))])
-                        ret, buffer = cv2.imencode('.jpg', combined)
-                        if ret:
-                            yield (b'--frame\r\n'
-                                  b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                    else:
-                        # 初回は元のフレームだけ表示
-                        combined = np.hstack([frame, frame])
-                        ret, buffer = cv2.imencode('.jpg', combined)
-                        if ret:
-                            yield (b'--frame\r\n'
-                                  b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                    
-                    # 完了した深度処理結果を取得
-                    if future.done():
-                        result_queue.put(future.result())
-                except Exception as e:
-                    print(f"[ERROR] Frame processing error: {e}")
-                    
-            time.sleep(0.01)  # スリープ時間を延長して負荷軽減
+            # カメラのフレームレート制御のための短い待機
+            time.sleep(0.01)
     finally:
-        executor.shutdown()
         camera.release()
+
+# 深度推論を行うスレッド関数
+def depth_processing_thread():
+    global latest_depth, latest_frame
+    model = initialize_model(MODEL_PATH)
+    input_name = model.get_inputs()[0].name
+    
+    # 前回処理したフレームを記録
+    last_processed_frame = None
+    
+    try:
+        while True:
+            current_frame = None
+            
+            # 最新フレームを取得（スレッドセーフに）
+            with frame_lock:
+                if latest_frame is not None:
+                    current_frame = latest_frame.copy()
+            
+            # 新しいフレームがあり、前回処理したものと異なる場合のみ処理
+            if current_frame is not None:
+                try:
+                    # フレームハッシュを比較する代わりに、一定間隔でのみ処理
+                    input_tensor = process_for_depth(current_frame)
+                    output = model.run(None, {input_name: input_tensor})[0]
+                    depth_vis = create_depth_visualization(output, current_frame)
+                    
+                    # 深度マップを更新（スレッドセーフに）
+                    with depth_lock:
+                        latest_depth = depth_vis
+                        
+                    last_processed_frame = current_frame
+                except Exception as e:
+                    print(f"[ERROR] Depth processing failed: {e}")
+                    
+            # 処理間隔を調整（必要に応じて）
+            time.sleep(0.1)  # 深度処理は10FPS程度で十分
+    except Exception as e:
+        print(f"[ERROR] Depth thread error: {e}")
+
+# ストリーミング用のジェネレーター関数
+def get_video_stream():
+    global latest_frame, latest_depth
+    empty_frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    
+    try:
+        while True:
+            # 最新のカメラフレームと深度マップを取得（スレッドセーフに）
+            current_frame = None
+            current_depth = None
+            
+            with frame_lock:
+                if latest_frame is not None:
+                    current_frame = latest_frame.copy()
+            
+            with depth_lock:
+                if latest_depth is not None:
+                    current_depth = latest_depth.copy()
+            
+            # カメラフレームがない場合は空のフレーム
+            if current_frame is None:
+                current_frame = empty_frame
+                
+            # 深度マップがない場合はカメラフレームを複製
+            if current_depth is None:
+                current_depth = current_frame
+                
+            # フレームを並べて表示
+            # 小さいサイズを使用してパフォーマンス向上
+            combined = np.hstack([
+                cv2.resize(current_frame, (320, 240)), 
+                cv2.resize(current_depth, (320, 240))
+            ])
+            
+            ret, buffer = cv2.imencode('.jpg', combined)
+            if ret:
+                yield (b'--frame\r\n'
+                      b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                      
+            # ストリーミングのフレームレート調整
+            time.sleep(0.033)  # 約30FPSでストリーミング
+    except Exception as e:
+        print(f"[ERROR] Streaming error: {e}")
 
 @app.get("/video")
 async def video_endpoint():
@@ -159,6 +193,11 @@ if __name__ == "__main__":
         subprocess.call("sudo sh -c 'echo performance > /sys/devices/system/cpu/cpufreq/policy0/scaling_governor'", shell=True)
     except:
         pass
-        
+    
+    # カメラスレッドと深度処理スレッドを開始
+    threading.Thread(target=camera_thread, daemon=True).start()
+    threading.Thread(target=depth_processing_thread, daemon=True).start()
+    print("[INFO] Camera and depth processing threads started")
+    
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8888)
