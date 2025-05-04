@@ -178,8 +178,80 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
     depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
     return depth_resized
 
-def process_depth_image(img_path=None, use_camera=False):
+# テスト用の合成画像と深度マップを生成する関数を追加
+def create_synthetic_data(width=384, height=256):
+    """テスト用の合成RGB画像と深度マップを生成する
+    
+    Returns:
+        frame: RGB画像
+        depth_map: 合成深度マップ
+    """
+    print("[情報] テスト用の合成画像と深度マップを生成します")
+    
+    # RGB画像を生成（単純な背景に四角形と円を描画）
+    frame = np.ones((height, width, 3), dtype=np.uint8) * 200  # グレーの背景
+    
+    # いくつかのオブジェクト（障害物）を描画
+    cv2.rectangle(frame, (50, 50), (120, 120), (0, 0, 255), -1)  # 赤い四角形
+    cv2.rectangle(frame, (200, 70), (280, 140), (255, 0, 0), -1)  # 青い四角形
+    cv2.circle(frame, (300, 180), 40, (0, 255, 0), -1)  # 緑の円
+    
+    # 通路を描画（床面と見なす領域）
+    cv2.rectangle(frame, (140, 0), (220, height-1), (200, 200, 150), -1)  # 通路
+    
+    # 深度マップを生成（単純な値を設定）
+    depth_map = np.ones((height, width), dtype=np.float32) * 5.0  # 背景は遠い（5m）
+    
+    # オブジェクトの深度を設定
+    depth_mask = np.zeros((height, width), dtype=np.float32)
+    cv2.rectangle(depth_mask, (50, 50), (120, 120), 1.0, -1)  # 1mの距離
+    cv2.rectangle(depth_mask, (200, 70), (280, 140), 1.5, -1)  # 1.5mの距離
+    cv2.circle(depth_mask, (300, 180), 40, 2.0, -1)  # 2mの距離
+    
+    # 通路の深度を設定
+    cv2.rectangle(depth_mask, (140, 0), (220, height-1), 3.0, -1)  # 3mの距離
+    
+    # 深度マップを更新（障害物がある場所は近いので値が小さく、通路は中間の値）
+    depth_map = np.where(depth_mask > 0, depth_mask, depth_map)
+    
+    # ノイズを追加してリアルさを向上
+    noise = np.random.normal(0, 0.05, depth_map.shape)
+    depth_map += noise
+    depth_map = np.clip(depth_map, 0.1, 10.0)  # 値の範囲をクリップ
+    
+    return frame, depth_map
+
+def process_depth_image(img_path=None, use_camera=False, use_synthetic=False):
     """深度画像を処理してOccupancy Gridを作成する"""
+    
+    if use_synthetic:
+        # 合成データを生成
+        frame, depth_map = create_synthetic_data()
+        
+        # 深度データの可視化
+        depth_vis = create_depth_visualization(depth_map, frame)
+        
+        # 深度を点群に変換
+        points = depth_to_point_cloud(depth_map)
+        
+        # 占有グリッドを作成
+        occupancy_grid = create_top_down_occupancy_grid(points)
+        
+        # グリッドを可視化して保存
+        visualize_occupancy_grid(occupancy_grid, frame, depth_vis)
+        
+        print(f"[情報] 結果を'occupancy_grid.png'に保存しました")
+        
+        # 結果を表示
+        cv2.imshow("合成入力画像", frame)
+        cv2.imshow("深度マップ", depth_vis)
+        grid_vis = visualize_occupancy_grid(occupancy_grid)
+        cv2.imshow("占有グリッド", grid_vis)
+        print("[情報] 任意のキーを押すと終了します")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        
+        return
     
     session, input_name = initialize_model(MODEL_PATH)
     
@@ -188,7 +260,7 @@ def process_depth_image(img_path=None, use_camera=False):
         cap = cv2.VideoCapture(0)
         
         if not cap.isOpened():
-            print("[エラー] カメラが開けません")
+            print("[エラー] カメラが開けません。--synthetic オプションを使用してテスト用の合成データを試してください。")
             return
         
         print("[情報] 'q'キーで終了します")
@@ -274,19 +346,22 @@ def process_depth_image(img_path=None, use_camera=False):
         cv2.destroyAllWindows()
     
     else:
-        print("[エラー] 画像パスを指定するか、カメラを使用してください")
+        print("[エラー] 画像パスを指定するか、カメラを使用するか、--synthetic オプションを使用してください")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='深度データからOccupancy Gridを生成します')
     parser.add_argument('--image', type=str, help='入力画像のパス')
     parser.add_argument('--camera', action='store_true', help='カメラを使用する')
+    parser.add_argument('--synthetic', action='store_true', help='テスト用の合成データを使用する')
     
     args = parser.parse_args()
     
-    if args.camera:
+    if args.synthetic:
+        process_depth_image(use_synthetic=True)
+    elif args.camera:
         process_depth_image(use_camera=True)
     elif args.image:
         process_depth_image(img_path=args.image)
     else:
-        print("[エラー] --imageまたは--cameraオプションを指定してください")
+        print("[エラー] --image、--camera、または --synthetic オプションを指定してください")
         parser.print_help()
