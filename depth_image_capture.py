@@ -5,7 +5,7 @@
 
 depth_occupancy_mapping.pyで使用するための深度画像をキャプチャするためのツール。
 カメラからの深度データをキャプチャして保存します。
-Linux環境に対応。
+Linux環境に対応。WebインターフェースでSSH環境でも使用可能。
 """
 
 import numpy as np
@@ -16,6 +16,25 @@ import time
 import sys
 import gc  # ガベージコレクションのための追加
 import traceback
+import threading
+import queue
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse, HTMLResponse
+import uvicorn
+
+# FastAPIアプリケーションの初期化
+app = FastAPI()
+
+# グローバル変数
+latest_frame = None
+latest_depth = None
+frame_lock = threading.Lock()
+depth_lock = threading.Lock()
+capture_event = threading.Event()
+stop_event = threading.Event()
+frame_count = 0
+output_dir = "depth_captures"
+depth_pattern = "objects"
 
 def initialize_camera(index=0, width=320, height=240):
     """カメラを初期化する"""
@@ -208,8 +227,265 @@ def save_depth_data(frame, depth_map, timestamp, output_dir):
     print(f"[情報] データを保存しました: {rgb_filename}, {depth_vis_filename}, {depth_raw_filename}")
     return rgb_filename, depth_vis_filename, depth_raw_filename
 
+# カメラスレッド関数
+def camera_thread_function(camera_index, width, height, pattern):
+    global latest_frame, latest_depth, frame_count, depth_pattern
+    
+    depth_pattern = pattern
+    camera = initialize_camera(camera_index, width, height)
+    if camera is None:
+        print("[エラー] カメラを初期化できません")
+        return
+    
+    try:
+        print("[情報] カメラスレッド開始")
+        while not stop_event.is_set():
+            start_time = time.time()
+            
+            success, frame = camera_capture_frame(camera)
+            if not success or frame is None:
+                print("[警告] フレームの取得に失敗しました")
+                time.sleep(0.1)
+                continue
+            
+            # フレームからの合成深度マップを作成
+            depth_map = create_synthetic_depth(frame, depth_pattern)
+            
+            # 最新フレームと深度を更新（スレッドセーフに）
+            with frame_lock:
+                latest_frame = frame.copy()
+            
+            with depth_lock:
+                latest_depth = depth_map.copy()
+                
+            # カウンター更新
+            frame_count += 1
+            
+            # キャプチャイベントが設定されていたら画像を保存
+            if capture_event.is_set():
+                timestamp = int(time.time() * 1000)
+                save_depth_data(frame, depth_map, timestamp, output_dir)
+                capture_event.clear()
+                
+            # フレームレート制御
+            process_time = time.time() - start_time
+            if process_time < 0.033:  # 目標30FPS
+                time.sleep(0.033 - process_time)
+                
+    except Exception as e:
+        print(f"[エラー] カメラスレッドでエラーが発生しました: {e}")
+        traceback.print_exc()
+    finally:
+        if camera is not None:
+            camera.release()
+        print("[情報] カメラスレッド終了")
+
+# ストリーミング用のジェネレーター関数
+def generate_frames():
+    global latest_frame, latest_depth, frame_count
+    
+    empty_frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    
+    try:
+        while not stop_event.is_set():
+            start_time = time.time()
+            
+            # 最新フレームと深度マップを取得（スレッドセーフに）
+            current_frame = None
+            current_depth_map = None
+            
+            with frame_lock:
+                if latest_frame is not None:
+                    current_frame = latest_frame.copy()
+            
+            with depth_lock:
+                if latest_depth is not None:
+                    current_depth_map = latest_depth.copy()
+            
+            # フレームとデプスマップが取得できない場合は空のフレームを使用
+            if current_frame is None:
+                current_frame = empty_frame
+                
+            if current_depth_map is None:
+                # 空のフレームの場合は灰色の深度マップを作成
+                current_depth_map = np.ones_like(current_frame[:,:,0]).astype(np.float32) * 2.5
+            
+            # 深度マップの可視化（表示用）
+            depth_vis = create_depth_visualization(current_depth_map, current_frame, with_gradient_bar=False)
+            
+            # 表示用の画像を作成
+            display_img = np.hstack([current_frame, depth_vis])
+            
+            # フレーム番号を追加
+            cv2.putText(
+                display_img, 
+                f"Frame: {frame_count}", 
+                (10, 40), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                0.5, 
+                (255, 255, 255), 
+                1
+            )
+            
+            # JPEGエンコードしてストリーミング
+            ret, buffer = cv2.imencode('.jpg', display_img)
+            if not ret:
+                continue
+                
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
+            # フレームレート制御（ブラウザの負荷を考慮して15FPS程度に）
+            process_time = time.time() - start_time
+            if process_time < 0.066:  # 約15FPS
+                time.sleep(0.066 - process_time)
+    except Exception as e:
+        print(f"[エラー] フレーム生成中にエラーが発生しました: {e}")
+        traceback.print_exc()
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return """
+    <html>
+        <head>
+            <title>深度画像キャプチャツール</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    text-align: center;
+                    background-color: #f0f0f0;
+                }
+                h1 {
+                    color: #333;
+                }
+                .container {
+                    max-width: 1200px;
+                    margin: 0 auto;
+                }
+                .video-container {
+                    margin: 20px 0;
+                }
+                .controls {
+                    margin: 20px 0;
+                    padding: 10px;
+                    background-color: #fff;
+                    border-radius: 5px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+                button {
+                    background-color: #4CAF50;
+                    border: none;
+                    color: white;
+                    padding: 10px 20px;
+                    text-align: center;
+                    text-decoration: none;
+                    display: inline-block;
+                    font-size: 16px;
+                    margin: 4px 2px;
+                    cursor: pointer;
+                    border-radius: 4px;
+                }
+                button:hover {
+                    background-color: #45a049;
+                }
+                select {
+                    padding: 8px 12px;
+                    margin: 8px 0;
+                    border: 1px solid #ccc;
+                    border-radius: 4px;
+                    box-sizing: border-box;
+                }
+                .status {
+                    font-weight: bold;
+                    margin: 10px 0;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>深度画像キャプチャツール</h1>
+                <div class="video-container">
+                    <img src="/video_feed" width="100%" />
+                </div>
+                <div class="controls">
+                    <button onclick="captureImage()">画像キャプチャ</button>
+                    <div>
+                        <label for="pattern">深度パターン:</label>
+                        <select id="pattern" onchange="changePattern()">
+                            <option value="objects">物体</option>
+                            <option value="gradient">グラデーション</option>
+                            <option value="random">ランダム</option>
+                            <option value="grayscale">グレースケール</option>
+                        </select>
+                    </div>
+                    <div id="status" class="status"></div>
+                </div>
+            </div>
+            
+            <script>
+                // 画像キャプチャ関数
+                function captureImage() {
+                    document.getElementById('status').textContent = '画像キャプチャ中...';
+                    fetch('/capture')
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById('status').textContent = data.message;
+                            setTimeout(() => {
+                                document.getElementById('status').textContent = '';
+                            }, 3000);
+                        })
+                        .catch(error => {
+                            document.getElementById('status').textContent = 'エラー: ' + error;
+                        });
+                }
+                
+                // パターン変更関数
+                function changePattern() {
+                    const pattern = document.getElementById('pattern').value;
+                    document.getElementById('status').textContent = 'パターン変更中...';
+                    fetch('/change_pattern?pattern=' + pattern)
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById('status').textContent = data.message;
+                            setTimeout(() => {
+                                document.getElementById('status').textContent = '';
+                            }, 3000);
+                        })
+                        .catch(error => {
+                            document.getElementById('status').textContent = 'エラー: ' + error;
+                        });
+                }
+            </script>
+        </body>
+    </html>
+    """
+
+@app.get("/video_feed")
+async def video_feed():
+    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/capture")
+async def capture():
+    capture_event.set()
+    return {"message": f"画像をキャプチャしました。保存先: {output_dir}"}
+
+@app.get("/change_pattern")
+async def change_pattern(pattern: str):
+    global depth_pattern
+    
+    if pattern in ["objects", "gradient", "random", "grayscale"]:
+        depth_pattern = pattern
+        return {"message": f"深度パターンを {pattern} に変更しました"}
+    else:
+        return {"message": "無効なパターンです"}
+
 def depth_capture_main():
     """メインの深度キャプチャ関数"""
+    global output_dir, depth_pattern
+    
     parser = argparse.ArgumentParser(description='深度画像キャプチャツール')
     parser.add_argument('--camera', type=int, default=0, help='使用するカメラのインデックス')
     parser.add_argument('--width', type=int, default=640, help='キャプチャ幅')
@@ -217,17 +493,17 @@ def depth_capture_main():
     parser.add_argument('--output', type=str, default='depth_captures', help='出力ディレクトリ')
     parser.add_argument('--pattern', type=str, default='objects', choices=['random', 'gradient', 'objects', 'grayscale'],
                         help='合成深度パターン (random, gradient, objects, grayscale)')
-    parser.add_argument('--continuous', action='store_true', help='連続キャプチャモード')
-    parser.add_argument('--interval', type=float, default=1.0, help='連続キャプチャの間隔（秒）')
-    parser.add_argument('--display-width', type=int, default=1280, help='表示画面の幅')
+    parser.add_argument('--port', type=int, default=8080, help='Webサーバーポート')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='Webサーバーホスト')
     
     args = parser.parse_args()
     
-    # カメラを初期化
-    camera = initialize_camera(args.camera, args.width, args.height)
-    if camera is None:
-        print("[エラー] カメラを初期化できません")
-        return
+    # グローバル変数の設定
+    output_dir = args.output
+    depth_pattern = args.pattern
+    
+    # 出力ディレクトリを作成
+    os.makedirs(output_dir, exist_ok=True)
     
     # Linuxシステムリソースの最適化（send_uvc_streaming_depthから参考）
     try:
@@ -243,87 +519,28 @@ def depth_capture_main():
     print(f"解像度: {args.width}x{args.height}")
     print(f"出力ディレクトリ: {args.output}")
     print(f"合成深度パターン: {args.pattern}")
+    print(f"Webサーバー: http://{args.host}:{args.port}")
     print("==============================")
-    print("[情報] 's'キーで深度画像をキャプチャ、'q'キーで終了")
-    if args.continuous:
-        print(f"[情報] 連続キャプチャモード有効 (間隔: {args.interval}秒)")
+    print("[情報] Webブラウザでアクセスして使用してください")
     print("==============================\n")
     
-    last_capture_time = 0
-    frame_count = 0
+    # カメラスレッドの開始
+    camera_thread = threading.Thread(
+        target=camera_thread_function,
+        args=(args.camera, args.width, args.height, args.pattern),
+        daemon=True
+    )
+    camera_thread.start()
     
+    # FastAPIサーバーの起動
     try:
-        while True:
-            start_time = time.time()
-            
-            success, frame = camera_capture_frame(camera)
-            if not success:
-                print("[警告] フレームの取得に失敗しました")
-                time.sleep(0.1)
-                continue
-            
-            # フレームからの合成深度マップを作成
-            depth_map = create_synthetic_depth(frame, args.pattern)
-            
-            # 深度マップの可視化（表示用にはグラデーションバーなし）
-            depth_vis = create_depth_visualization(depth_map, frame, with_gradient_bar=False)
-            
-            # 表示用の画像を作成
-            display_img = np.hstack([frame, depth_vis])
-            
-            # 表示サイズが大きすぎる場合は縮小
-            if display_img.shape[1] > args.display_width:
-                scale = args.display_width / display_img.shape[1]
-                display_img = cv2.resize(display_img, None, fx=scale, fy=scale)
-            
-            # フレーム番号を追加
-            frame_count += 1
-            cv2.putText(
-                display_img, 
-                f"Frame: {frame_count}", 
-                (10, 40), 
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                0.5, 
-                (255, 255, 255), 
-                1
-            )
-            
-            # 表示
-            cv2.imshow("カメラ & 深度マップ", display_img)
-            
-            # キー入力をチェック
-            key = cv2.waitKey(1) & 0xFF
-            
-            # 連続キャプチャモード
-            current_time = time.time()
-            if args.continuous and (current_time - last_capture_time) >= args.interval:
-                timestamp = int(current_time * 1000)  # ミリ秒単位のタイムスタンプ
-                save_depth_data(frame, depth_map, timestamp, args.output)
-                last_capture_time = current_time
-            
-            # キー操作
-            if key == ord('s'):
-                # 手動キャプチャ
-                timestamp = int(time.time() * 1000)
-                save_depth_data(frame, depth_map, timestamp, args.output)
-            elif key == ord('q'):
-                break
-            
-            # フレームレート制御
-            process_time = time.time() - start_time
-            if process_time < 0.033:  # 目標30FPS
-                time.sleep(0.033 - process_time)
-                
+        uvicorn.run(app, host=args.host, port=args.port)
     except KeyboardInterrupt:
         print("\n[情報] ユーザーによる中断")
-    except Exception as e:
-        print(f"[エラー] 予期しないエラーが発生しました: {e}")
-        traceback.print_exc()
     finally:
-        # リソースを解放
-        if camera is not None:
-            camera.release()
-        cv2.destroyAllWindows()
+        # 終了処理
+        stop_event.set()
+        camera_thread.join(timeout=2.0)
         gc.collect()
         print("[情報] 終了しました")
 
