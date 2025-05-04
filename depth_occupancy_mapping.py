@@ -7,6 +7,10 @@ import time
 import threading
 import queue
 import sys
+import gc  # ガベージコレクションのための追加
+
+# グローバルセッション変数（適切なタイミングで解放するため）
+_model_session = None
 
 # 設定パラメータ
 GRID_RESOLUTION = 0.05  # メートル単位でのグリッドサイズ
@@ -21,6 +25,20 @@ frame_lock = threading.Lock()
 
 def initialize_model(model_path: str):
     """Depth Anythingモデルを初期化する"""
+    global _model_session
+    
+    # 既存のセッションがあれば明示的に解放
+    if _model_session is not None:
+        print("[INFO] 既存のモデルセッションを解放します")
+        try:
+            del _model_session
+            _model_session = None
+            # 明示的にガベージコレクション
+            gc.collect()
+            time.sleep(0.1)  # メモリ解放の時間を確保
+        except Exception as e:
+            print(f"[WARN] セッション解放中にエラーが発生しましたが続行します: {e}")
+    
     try:
         print(f"[INFO] モデルを読み込み中: {model_path}")
         if not os.path.exists(model_path):
@@ -35,51 +53,62 @@ def initialize_model(model_path: str):
             print(f"[エラー] axengineのインポートに失敗しました: {e}")
             return None, None
             
-        # axengineのバージョンに応じて適切な初期化方法を試す
-        session = None
         try:
             # 最もシンプルな初期化方法を試す
-            print("[INFO] 基本的なモデル初期化を試みます")
-            session = axe.InferenceSession(model_path)
-        except Exception as e:
-            print(f"[警告] シンプルな初期化に失敗: {e}")
+            print("[INFO] モデル初期化を開始します...")
+            
             try:
-                # オプションを使用した初期化（新しいバージョン向け）
-                print("[INFO] オプション付き初期化を試みます")
-                options = {
-                    "axe.input_layout": "NHWC",
-                    "axe.output_layout": "NHWC"
-                }
-                session = axe.InferenceSession(model_path, options)
+                # M5Stackでの安定性のためのワークアラウンド
+                # 一部のシステムではgcを実行してからモデルをロードすると安定する
+                gc.collect()
+                time.sleep(0.1)
+                
+                # モデル初期化
+                session = axe.InferenceSession(model_path)
+                _model_session = session  # グローバル変数に保存
+                
+                # モデル情報を表示
+                inputs = session.get_inputs()
+                if not inputs or len(inputs) == 0:
+                    print("[エラー] モデルには入力がありません")
+                    return None, None
+                
+                input_info = inputs[0]
+                input_name = input_info.name
+                print(f"[INFO] モデル入力名: {input_name}")
+                print(f"[INFO] モデル入力形状: {input_info.shape}")
+                print(f"[INFO] モデル入力データ型: {input_info.dtype}")
+                
+                outputs = session.get_outputs()
+                if outputs and len(outputs) > 0:
+                    print(f"[INFO] モデル出力名: {outputs[0].name}")
+                    print(f"[INFO] モデル出力形状: {outputs[0].shape}")
+                
+                print("[INFO] モデル初期化に成功しました")
+                return session, input_name
+                
             except Exception as e:
                 print(f"[エラー] モデル初期化に失敗しました: {e}")
                 return None, None
-            
-        # モデル情報を表示
-        try:
-            inputs = session.get_inputs()
-            if not inputs or len(inputs) == 0:
-                print("[エラー] モデルには入力がありません")
-                return None, None
                 
-            input_info = inputs[0]
-            input_name = input_info.name
-            print(f"[INFO] モデル入力名: {input_name}")
-            print(f"[INFO] モデル入力形状: {input_info.shape}")
-            print(f"[INFO] モデル入力データ型: {input_info.dtype}")
-            
-            outputs = session.get_outputs()
-            if outputs and len(outputs) > 0:
-                print(f"[INFO] モデル出力名: {outputs[0].name}")
-                print(f"[INFO] モデル出力形状: {outputs[0].shape}")
-            
-            return session, input_name
         except Exception as e:
-            print(f"[エラー] モデル情報の取得に失敗しました: {e}")
+            print(f"[エラー] モデル初期化プロセスに失敗しました: {e}")
             return None, None
     except Exception as e:
-        print(f"[エラー] モデル初期化プロセスに失敗しました: {e}")
+        print(f"[エラー] モデル初期化プロセスに致命的なエラーが発生しました: {e}")
         return None, None
+
+def release_model():
+    """モデルリソースを安全に解放する"""
+    global _model_session
+    if _model_session is not None:
+        try:
+            print("[INFO] モデルリソースを解放します")
+            del _model_session
+            _model_session = None
+            gc.collect()
+        except Exception as e:
+            print(f"[WARN] モデル解放中にエラーが発生しましたが続行します: {e}")
 
 def initialize_camera(index=0, width=320, height=240):
     """カメラを初期化する - より安定した設定を使用"""
@@ -441,21 +470,34 @@ def process_depth_image_with_camera():
     
     # axengineが利用可能かチェック
     model_available = True
+    session = None
+    input_name = None
+    
     try:
         import axengine
-        session, input_name = initialize_model(MODEL_PATH)
-        if session is None:
-            print("[警告] モデル初期化に失敗しました。ダミーモデルを使用します。")
+        # モデル初期化を試みる
+        try:
+            session, input_name = initialize_model(MODEL_PATH)
+            if session is None:
+                print("[警告] モデル初期化に失敗しました。ダミーモデルを使用します。")
+                model_available = False
+        except Exception as e:
+            print(f"[警告] モデル初期化中にエラーが発生しました: {e}")
             model_available = False
     except ImportError:
         print("[警告] axengineがインポートできません。ダミーモデルを使用します。")
-        session, input_name = None, None
         model_available = False
     
     # カメラを初期化
-    camera = initialize_camera()
-    if camera is None:
-        print("[エラー] カメラを開けません。--synthetic オプションを使用してテスト用の合成データを試してください。")
+    try:
+        camera = initialize_camera()
+        if camera is None:
+            print("[エラー] カメラを開けません。--synthetic オプションを使用してテスト用の合成データを試してください。")
+            release_model()  # モデルリソースを解放
+            return
+    except Exception as e:
+        print(f"[エラー] カメラ初期化中にエラーが発生しました: {e}")
+        release_model()  # モデルリソースを解放
         return
     
     # カメラスレッドを開始
@@ -536,9 +578,17 @@ def process_depth_image_with_camera():
                 
     finally:
         # リソースを解放
+        print("[INFO] リソースを解放しています...")
         stop_event.set()
         camera_thread.join(timeout=1.0)
         cv2.destroyAllWindows()
+        
+        # モデルを確実に解放
+        release_model()
+        
+        # 明示的にガベージコレクション
+        gc.collect()
+        
         print("[INFO] 処理を終了しました")
 
 def process_depth_image(img_path=None, use_camera=False, use_synthetic=False):
@@ -584,8 +634,19 @@ def process_depth_image(img_path=None, use_camera=False, use_synthetic=False):
         return
     
     if use_camera:
-        # 改良版のカメラ処理関数を呼び出す
-        process_depth_image_with_camera()
+        try:
+            # 改良版のカメラ処理関数を呼び出す
+            process_depth_image_with_camera()
+        except KeyboardInterrupt:
+            print("[INFO] ユーザーによる中断")
+        except Exception as e:
+            print(f"[エラー] カメラ処理中に予期しないエラーが発生しました: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # 確実にモデルリソースを解放
+            release_model()
+            gc.collect()
         return
     
     elif img_path:
@@ -680,24 +741,37 @@ def check_dependencies():
     print("\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='深度データからOccupancy Gridを生成します')
-    parser.add_argument('--image', type=str, help='入力画像のパス')
-    parser.add_argument('--camera', action='store_true', help='カメラを使用する')
-    parser.add_argument('--synthetic', action='store_true', help='テスト用の合成データを使用する')
-    parser.add_argument('--check', action='store_true', help='依存関係をチェックする')
-    
-    args = parser.parse_args()
-    
-    if args.check:
-        check_dependencies()
-        sys.exit(0)
+    try:
+        parser = argparse.ArgumentParser(description='深度データからOccupancy Gridを生成します')
+        parser.add_argument('--image', type=str, help='入力画像のパス')
+        parser.add_argument('--camera', action='store_true', help='カメラを使用する')
+        parser.add_argument('--synthetic', action='store_true', help='テスト用の合成データを使用する')
+        parser.add_argument('--check', action='store_true', help='依存関係をチェックする')
         
-    if args.synthetic:
-        process_depth_image(use_synthetic=True)
-    elif args.camera:
-        process_depth_image(use_camera=True)
-    elif args.image:
-        process_depth_image(img_path=args.image)
-    else:
-        print("[エラー] --image、--camera、--synthetic、または --check オプションを指定してください")
-        parser.print_help()
+        args = parser.parse_args()
+        
+        if args.check:
+            check_dependencies()
+            sys.exit(0)
+            
+        if args.synthetic:
+            process_depth_image(use_synthetic=True)
+        elif args.camera:
+            process_depth_image(use_camera=True)
+        elif args.image:
+            process_depth_image(img_path=args.image)
+        else:
+            print("[エラー] --image、--camera、--synthetic、または --check オプションを指定してください")
+            parser.print_help()
+    except KeyboardInterrupt:
+        print("\n[INFO] プログラムが中断されました")
+    except Exception as e:
+        print(f"[エラー] 予期しないエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # 最終的なクリーンアップ
+        release_model()
+        cv2.destroyAllWindows()
+        gc.collect()
+        print("[INFO] 終了処理が完了しました")
