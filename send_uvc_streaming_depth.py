@@ -85,14 +85,14 @@ def process_for_depth(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray: 
             print("[ERROR] Input frame is None")
             return None
             
-        print(f"[DEBUG] Processing frame: shape={frame.shape}, type={frame.dtype}")
+        #print(f"[DEBUG] Processing frame: shape={frame.shape}, type={frame.dtype}")
         
         resized = cv2.resize(frame, target_size)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         tensor = np.expand_dims(rgb, axis=0).astype(np.uint8)  # NHWC uint8
         
-        print(f"[DEBUG] Input tensor: shape={tensor.shape}, type={tensor.dtype}, " 
-              f"min={tensor.min()}, max={tensor.max()}")
+        #print(f"[DEBUG] Input tensor: shape={tensor.shape}, type={tensor.dtype}, " 
+        #      f"min={tensor.min()}, max={tensor.max()}")
         
         return tensor
     except Exception as e:
@@ -122,8 +122,8 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
             print("[ERROR] Depth map is None")
             return original_frame
             
-        print(f"[DEBUG] Depth map: shape={depth_map.shape}, type={depth_map.dtype}, "
-              f"min={depth_map.min()}, max={depth_map.max()}")
+        #print(f"[DEBUG] Depth map: shape={depth_map.shape}, type={depth_map.dtype}, "
+        #      f"min={depth_map.min()}, max={depth_map.max()}")
             
         depth_feature = depth_map.squeeze()
         
@@ -186,7 +186,7 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
         # グラデーションバーを結合
         depth_with_scale = np.vstack([depth_colored, gradient_bar])
         
-        print(f"[DEBUG] Depth visualization created: shape={depth_with_scale.shape}")
+        #print(f"[DEBUG] Depth visualization created: shape={depth_with_scale.shape}")
         
         return depth_with_scale
         
@@ -257,7 +257,7 @@ def depth_processing_thread():
                     input_tensor = process_for_depth(current_frame)
                     
                     if input_tensor is not None:
-                        print(f"[DEBUG] Running inference with tensor shape {input_tensor.shape}")
+                        #print(f"[DEBUG] Running inference with tensor shape {input_tensor.shape}")
                         start_time = time.time()
                         outputs = model.run(None, {input_name: input_tensor})
                         
@@ -265,8 +265,8 @@ def depth_processing_thread():
                             print("[ERROR] Model returned no outputs")
                         else:
                             output = outputs[0]
-                            print(f"[DEBUG] Inference complete in {time.time()-start_time:.2f}s, "
-                                  f"output shape={output.shape}, type={output.dtype}")
+                        #    print(f"[DEBUG] Inference complete in {time.time()-start_time:.2f}s, "
+                        #          f"output shape={output.shape}, type={output.dtype}")
                             
                             #depth_vis = create_depth_visualization(output, current_frame)
                             depth_vis = create_depth_visualization_ori(output, current_frame)
