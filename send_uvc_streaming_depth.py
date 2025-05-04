@@ -109,11 +109,30 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
               f"min={depth_map.min()}, max={depth_map.max()}")
             
         depth_feature = depth_map.squeeze()
-        # 固定値で正規化して計算コスト削減
-        normalized = np.clip((depth_feature - 0.1) / 0.8, 0, 1)
         
-        # 効率的な色変換
-        depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
+        # 動的な正規化 - 現在のフレームの最小・最大値に基づいて正規化することで
+        # 常に適切なコントラストを得る
+        depth_min = np.min(depth_feature)
+        depth_max = np.max(depth_feature)
+        
+        # 正規化範囲を調整して、より鮮明な視覚化を行う
+        # 最小値と最大値の差を拡大することで、コントラストを強調
+        normalized = (depth_feature - depth_min) / (depth_max - depth_min + 1e-6)
+        
+        # 色マップを適用（MAGMAよりも視認性の高いJETやVIRIDISを試す）
+        # 複数のカラーマップを試して最適なものを選択
+        depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        
+        # 深度値を示すテキストを重ねる
+        cv2.putText(
+            depth_colored,
+            f"Min: {depth_min:.2f}, Max: {depth_max:.2f}",
+            (10, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            1
+        )
         
         print(f"[DEBUG] Depth visualization created: shape={depth_colored.shape}")
         
