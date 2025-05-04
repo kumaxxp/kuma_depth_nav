@@ -387,7 +387,7 @@ def create_synthetic_data(width=384, height=256):
     # ノイズを追加してリアルさを向上
     noise = np.random.normal(0, 0.05, depth_map.shape)
     depth_map += noise
-    depth_map = np.clip(depth_map, 0.1, 10.0)  # 値の範囲をクリップ
+    depth_mapを np.clip(depth_map, 0.1, 10.0)  # 値の範囲をクリップ
     
     return frame, depth_map
 
@@ -429,7 +429,7 @@ def run_dummy_model(input_tensor):
     # ノイズを追加
     noise = np.random.normal(0, 0.05, depth_map.shape)
     depth_map += noise
-    depth_mapは np.clip(depth_map, 0.1, 10.0)  # 値の範囲をクリップ
+    depth_map = np.clip(depth_map, 0.1, 10.0)  # 値の範囲をクリップ
     
     # モデル出力の形式に合わせる
     # 不明な場合は単一の深度マップを返す
