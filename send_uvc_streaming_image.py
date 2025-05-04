@@ -324,12 +324,14 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
         Z = depth_map
         
         # 形状を変形して点群に
-        points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
-        
-        # 無効な点（深度値が0に近い）を除外
-        valid_points = points[points[:, 2] > 0.1]
-        
-        return valid_points
+#        points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
+#        
+#        # 無効な点（深度値が0に近い）を除外
+#        valid_points = points[points[:, 2] > 0.1]
+#        
+#        return valid_points
+        return np.zeros((0, 3))  # 空の点群を返す
+    
     except Exception as e:
         print(f"[エラー] 点群変換中にエラーが発生しました: {e}")
         return np.zeros((0, 3))  # 空の点群を返す
