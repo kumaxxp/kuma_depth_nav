@@ -293,7 +293,7 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
     """深度マップから点群を生成する
     
     Args:
-        depth_map: 深度マップ (H, W)
+        depth_map: 深度マップ (任意の形状、最終的に2Dに変換)
         fx, fy: 焦点距離
         cx, cy: 画像中心
     
@@ -301,7 +301,16 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
         points: 3D点群 (N, 3)
     """
     try:
-        height, width = 384, 256
+        # 深度マップの形状を調整
+        # 4次元配列 (1, 1, H, W) や 3次元配列 (1, H, W) から2次元 (H, W) にする
+        if depth_map.ndim > 2:
+            depth_map = depth_map.squeeze()
+        
+        # 実際の高さと幅を取得
+        height, width = depth_map.shape
+        
+        # デバッグ情報
+        print(f"[INFO] 深度マップの形状: {depth_map.shape}")
        
         # 深度マップの値をチェック
         if np.isnan(depth_map).any() or np.isinf(depth_map).any():
@@ -324,18 +333,19 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
         Z = depth_map
         
         # 形状を変形して点群に
-#        points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
-#        
-#        # 無効な点（深度値が0に近い）を除外
-#        valid_points = points[points[:, 2] > 0.1]
-#        
-#        return valid_points
-        return np.zeros((0, 3))  # 空の点群を返す
+        points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
+        
+        # 無効な点（深度値が0に近い）を除外
+        valid_points = points[points[:, 2] > 0.1]
+        
+        print(f"[INFO] 点群作成完了: 元の点={points.shape[0]}, 有効点={valid_points.shape[0]}")
+        return valid_points
     
     except Exception as e:
         print(f"[エラー] 点群変換中にエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
         return np.zeros((0, 3))  # 空の点群を返す
-
 
 # 深度推論を行うスレッド関数
 def depth_processing_thread():
