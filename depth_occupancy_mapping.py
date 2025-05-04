@@ -5,6 +5,8 @@ import argparse
 import os
 import axengine as axe
 import time
+import threading
+import queue
 
 # 設定パラメータ
 GRID_RESOLUTION = 0.05  # メートル単位でのグリッドサイズ
@@ -13,13 +15,94 @@ GRID_HEIGHT = 100  # グリッドの高さ（セル数）
 HEIGHT_THRESHOLD = 0.3  # 高さの閾値（メートル）- この値より低いものは通行可能とする
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'  # モデルパス
 
+# グローバル変数として最新のカメラフレームを保持
+latest_frame = None
+frame_lock = threading.Lock()
+
 def initialize_model(model_path: str):
     """Depth Anythingモデルを初期化する"""
-    session = axe.InferenceSession(model_path)
-    input_info = session.get_inputs()[0]
-    print("[INFO] モデル入力形状:", input_info.shape)
-    print("[INFO] モデル入力データ型:", input_info.dtype)
-    return session, input_info.name
+    try:
+        print(f"[INFO] モデルを読み込み中: {model_path}")
+        if not os.path.exists(model_path):
+            print(f"[エラー] モデルファイルが見つかりません: {model_path}")
+            raise FileNotFoundError(f"モデルファイルが見つかりません: {model_path}")
+            
+        # axengineのバージョンに応じて適切な初期化方法を試す
+        try:
+            # オプションを使用した初期化（新しいバージョン向け）
+            options = {}
+            options["axe.input_layout"] = "NHWC"  # 入力レイアウトを明示
+            options["axe.output_layout"] = "NHWC" # 出力レイアウトを明示
+            options["axe.use_dsp"] = "true"       # DSP使用を有効化
+            
+            session = axe.InferenceSession(model_path, options)
+        except TypeError:
+            # オプションなしで初期化（古いバージョン向け）
+            print("[INFO] 基本的なモデル初期化に切り替えます")
+            session = axe.InferenceSession(model_path)
+            
+        # モデル情報を表示
+        input_info = session.get_inputs()[0]
+        print("[INFO] モデル入力形状:", input_info.shape)
+        print("[INFO] モデル入力データ型:", input_info.dtype)
+        return session, input_info.name
+    except Exception as e:
+        print(f"[エラー] モデル初期化に失敗しました: {e}")
+        raise
+
+def initialize_camera(index=0, width=320, height=240):
+    """カメラを初期化する - より安定した設定を使用"""
+    try:
+        cam = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        if not cam.isOpened():
+            print("[エラー] カメラを開けませんでした")
+            return None
+        print("[INFO] カメラが正常に初期化されました")
+        return cam
+    except Exception as e:
+        print(f"[エラー] カメラ初期化中にエラーが発生しました: {e}")
+        return None
+
+def camera_capture_frame(camera):
+    """バッファをクリアしてカメラフレームを取得する"""
+    if camera is None:
+        return False, None
+    
+    # バッファから古いフレームを捨てる
+    for _ in range(3):
+        camera.grab()
+        
+    success, frame = camera.retrieve()
+    return success, frame
+
+def camera_thread_function(camera, stop_event):
+    """カメラからフレームを連続的に取得するスレッド関数"""
+    global latest_frame
+    
+    print("[INFO] カメラスレッドを開始しました")
+    
+    try:
+        while not stop_event.is_set():
+            success, frame = camera_capture_frame(camera)
+            if success and frame is not None:
+                # 最新フレームを更新（スレッドセーフに）
+                with frame_lock:
+                    latest_frame = frame.copy()
+            else:
+                time.sleep(0.01)
+                continue
+                
+            # カメラのフレームレート制御のための短い待機
+            time.sleep(0.05)  # 20FPS程度
+    except Exception as e:
+        print(f"[エラー] カメラスレッド内でエラーが発生しました: {e}")
+    finally:
+        print("[INFO] カメラスレッドを終了します")
+        if camera is not None:
+            camera.release()
 
 def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
     """フレームを処理してモデル入力用に準備する"""
@@ -221,6 +304,90 @@ def create_synthetic_data(width=384, height=256):
     
     return frame, depth_map
 
+def process_depth_image_with_camera():
+    """カメラ入力を使って深度処理とOccupancy Grid Mappingを行う（改良版）"""
+    global latest_frame
+    
+    # 深度推論モデルを初期化
+    try:
+        session, input_name = initialize_model(MODEL_PATH)
+    except Exception as e:
+        print(f"[エラー] モデル初期化に失敗しました: {e}")
+        return
+    
+    # カメラを初期化
+    camera = initialize_camera()
+    if camera is None:
+        print("[エラー] カメラを開けません。--synthetic オプションを使用してテスト用の合成データを試してください。")
+        return
+    
+    # カメラスレッドを開始
+    stop_event = threading.Event()
+    camera_thread = threading.Thread(target=camera_thread_function, args=(camera, stop_event))
+    camera_thread.daemon = True
+    camera_thread.start()
+    
+    print("[INFO] カメラスレッドを起動しました。'q'キーで終了します。")
+    
+    try:
+        wait_frames = 0
+        while True:
+            # フレームを待機
+            frame = None
+            with frame_lock:
+                if latest_frame is not None:
+                    frame = latest_frame.copy()
+            
+            if frame is None:
+                wait_frames += 1
+                if wait_frames % 10 == 0:
+                    print(f"[警告] カメラフレーム待機中... ({wait_frames})")
+                time.sleep(0.1)
+                continue
+                
+            wait_frames = 0
+            
+            try:
+                # フレームを処理
+                input_tensor = process_frame(frame)
+                
+                # 深度推定を実行
+                depth_output = session.run(None, {input_name: input_tensor})[0]
+                depth_map = depth_output.squeeze()
+                
+                # 深度データの可視化
+                depth_vis = create_depth_visualization(depth_map, frame)
+                
+                # 深度を点群に変換
+                points = depth_to_point_cloud(depth_map)
+                
+                # 占有グリッドを作成
+                occupancy_grid = create_top_down_occupancy_grid(points)
+                
+                # グリッドを可視化
+                grid_vis = visualize_occupancy_grid(occupancy_grid)
+                
+                # 結果を表示
+                cv2.imshow("カメラ", frame)
+                cv2.imshow("深度マップ", depth_vis)
+                cv2.imshow("占有グリッド", grid_vis)
+                
+            except Exception as e:
+                print(f"[エラー] フレーム処理中にエラーが発生しました: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # キー入力をチェック
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+                
+    finally:
+        # リソースを解放
+        stop_event.set()
+        camera_thread.join(timeout=1.0)
+        cv2.destroyAllWindows()
+        print("[INFO] 処理を終了しました")
+
 def process_depth_image(img_path=None, use_camera=False, use_synthetic=False):
     """深度画像を処理してOccupancy Gridを作成する"""
     
@@ -253,97 +420,56 @@ def process_depth_image(img_path=None, use_camera=False, use_synthetic=False):
         
         return
     
-    session, input_name = initialize_model(MODEL_PATH)
-    
     if use_camera:
-        # カメラからの入力を処理
-        cap = cv2.VideoCapture(0)
-        
-        if not cap.isOpened():
-            print("[エラー] カメラが開けません。--synthetic オプションを使用してテスト用の合成データを試してください。")
-            return
-        
-        print("[情報] 'q'キーで終了します")
-        
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    print("[警告] フレームを取得できませんでした")
-                    continue
-                
-                # フレームを処理
-                input_tensor = process_frame(frame)
-                
-                # 深度推定を実行
-                try:
-                    depth_output = session.run(None, {input_name: input_tensor})[0]
-                except Exception as e:
-                    print(f"[エラー] モデル実行中にエラーが発生しました: {e}")
-                    continue
-                
-                depth_map = depth_output.squeeze()
-                
-                # 深度データの可視化
-                depth_vis = create_depth_visualization(depth_map, frame)
-                
-                # 深度を点群に変換
-                points = depth_to_point_cloud(depth_map)
-                
-                # 占有グリッドを作成
-                occupancy_grid = create_top_down_occupancy_grid(points)
-                
-                # グリッドを可視化
-                grid_vis = visualize_occupancy_grid(occupancy_grid)
-                
-                # 結果を表示
-                cv2.imshow("カメラ", frame)
-                cv2.imshow("深度マップ", depth_vis)
-                cv2.imshow("占有グリッド", grid_vis)
-                
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                
-        finally:
-            cap.release()
-            cv2.destroyAllWindows()
+        # 改良版のカメラ処理関数を呼び出す
+        process_depth_image_with_camera()
+        return
     
     elif img_path:
         if not os.path.exists(img_path):
             print(f"[エラー] 画像ファイルが見つかりません: {img_path}")
             return
         
-        # 画像ファイルを読み込み
-        frame = cv2.imread(img_path)
-        
-        # フレームを処理
-        input_tensor = process_frame(frame)
-        
-        # 深度推定を実行
-        depth_output = session.run(None, {input_name: input_tensor})[0]
-        depth_map = depth_output.squeeze()
-        
-        # 深度データの可視化
-        depth_vis = create_depth_visualization(depth_map, frame)
-        
-        # 深度を点群に変換
-        points = depth_to_point_cloud(depth_map)
-        
-        # 占有グリッドを作成
-        occupancy_grid = create_top_down_occupancy_grid(points)
-        
-        # グリッドを可視化して保存
-        visualize_occupancy_grid(occupancy_grid, frame, depth_vis)
-        
-        print(f"[情報] 結果を'occupancy_grid.png'に保存しました")
-        
-        # 結果を表示
-        cv2.imshow("カメラ", frame)
-        cv2.imshow("深度マップ", depth_vis)
-        grid_vis = visualize_occupancy_grid(occupancy_grid)
-        cv2.imshow("占有グリッド", grid_vis)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        try:
+            # モデルを初期化
+            session, input_name = initialize_model(MODEL_PATH)
+            
+            # 画像ファイルを読み込み
+            frame = cv2.imread(img_path)
+            
+            # フレームを処理
+            input_tensor = process_frame(frame)
+            
+            # 深度推定を実行
+            depth_output = session.run(None, {input_name: input_tensor})[0]
+            depth_map = depth_output.squeeze()
+            
+            # 深度データの可視化
+            depth_vis = create_depth_visualization(depth_map, frame)
+            
+            # 深度を点群に変換
+            points = depth_to_point_cloud(depth_map)
+            
+            # 占有グリッドを作成
+            occupancy_grid = create_top_down_occupancy_grid(points)
+            
+            # グリッドを可視化して保存
+            visualize_occupancy_grid(occupancy_grid, frame, depth_vis)
+            
+            print(f"[情報] 結果を'occupancy_grid.png'に保存しました")
+            
+            # 結果を表示
+            cv2.imshow("カメラ", frame)
+            cv2.imshow("深度マップ", depth_vis)
+            grid_vis = visualize_occupancy_grid(occupancy_grid)
+            cv2.imshow("占有グリッド", grid_vis)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            
+        except Exception as e:
+            print(f"[エラー] 画像処理中にエラーが発生しました: {e}")
+            import traceback
+            traceback.print_exc()
     
     else:
         print("[エラー] 画像パスを指定するか、カメラを使用するか、--synthetic オプションを使用してください")
