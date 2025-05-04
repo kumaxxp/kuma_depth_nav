@@ -110,23 +110,44 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
             
         depth_feature = depth_map.squeeze()
         
-        # 動的な正規化 - 現在のフレームの最小・最大値に基づいて正規化することで
-        # 常に適切なコントラストを得る
+        # 値がNaNや無限大でないかチェック
+        if np.isnan(depth_feature).any() or np.isinf(depth_feature).any():
+            print("[WARNING] Depth map contains NaN or Inf values, replacing with zeros")
+            depth_feature = np.nan_to_num(depth_feature, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        # データの範囲をチェックして異常値を検知
         depth_min = np.min(depth_feature)
         depth_max = np.max(depth_feature)
         
-        # 正規化範囲を調整して、より鮮明な視覚化を行う
-        # 最小値と最大値の差を拡大することで、コントラストを強調
-        normalized = (depth_feature - depth_min) / (depth_max - depth_min + 1e-6)
+        # 値の範囲が異常に小さい場合は警告
+        if abs(depth_max - depth_min) < 1e-6:
+            print(f"[WARNING] Depth range too small: min={depth_min}, max={depth_max}")
+            # 最小値と最大値を設定して強制的に範囲を作る
+            depth_min = 0
+            depth_max = 1
+            normalized = np.zeros_like(depth_feature)
+        else:
+            # 正規化 - ロバストにするためにクリッピングも適用
+            normalized = (depth_feature - depth_min) / (depth_max - depth_min + 1e-6)
+            # 念のため0-1の範囲に収める
+            normalized = np.clip(normalized, 0, 1)
         
-        # 色マップを適用（MAGMAよりも視認性の高いJETやVIRIDISを試す）
-        # 複数のカラーマップを試して最適なものを選択
-        depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        # 正規化データのヒストグラムを文字ベースで出力（簡易的な分布確認）
+        if depth_processing_count % 30 == 0:  # 30フレームごとに表示
+            hist, _ = np.histogram(normalized, bins=10, range=(0, 1))
+            total = hist.sum()
+            if total > 0:
+                hist_norm = hist / total
+                print("[HISTOGRAM]", "".join(["█" * int(h * 50) for h in hist_norm]))
         
-        # 深度値を示すテキストを重ねる
+        # uint8に変換して色マップを適用
+        depth_uint8 = (normalized * 255).astype(np.uint8)
+        depth_colored = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_JET)
+        
+        # 深度情報をオーバーレイ表示
         cv2.putText(
             depth_colored,
-            f"Min: {depth_min:.2f}, Max: {depth_max:.2f}",
+            f"Min: {depth_min:.4f}, Max: {depth_max:.4f}",
             (10, 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -134,11 +155,28 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
             1
         )
         
-        print(f"[DEBUG] Depth visualization created: shape={depth_colored.shape}")
+        # 境界線用のグラデーションバーを追加
+        h, w = depth_colored.shape[:2]
+        gradient_bar = np.zeros((20, w, 3), dtype=np.uint8)
+        for x in range(w):
+            color_value = int(255 * x / w)
+            gradient_bar[:, x] = cv2.applyColorMap(np.array([[color_value]], dtype=np.uint8), cv2.COLORMAP_JET)[0, 0]
         
-        return depth_colored  # 元のサイズに戻さない（表示時にリサイズ）
+        # テキストラベル追加
+        cv2.putText(gradient_bar, "近い", (10, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        cv2.putText(gradient_bar, "遠い", (w-40, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        # グラデーションバーを結合
+        depth_with_scale = np.vstack([depth_colored, gradient_bar])
+        
+        print(f"[DEBUG] Depth visualization created: shape={depth_with_scale.shape}")
+        
+        return depth_with_scale
+        
     except Exception as e:
         print(f"[ERROR] Failed to create depth visualization: {e}")
+        import traceback
+        traceback.print_exc()
         return original_frame
 
 # カメラ画像を連続的に取得するスレッド関数
