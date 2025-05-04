@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import time
 import axengine as axe
+import subprocess
 
 app = FastAPI()
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
@@ -71,12 +72,12 @@ def get_video_stream():
             #for _ in range(3):
             #    camera.grab()
             #success, frame = camera.retrieve()
-            success, frame = camera.read()
 
             start = time.perf_counter()
             cam_time = time.perf_counter() - start
             cam_times.append(cam_time)
 
+            success, frame = camera.read()
             if not success or frame is None:
                 print("[WARN] Failed to read frame. Skipping...")
                 continue

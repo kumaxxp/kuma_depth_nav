@@ -25,7 +25,7 @@ def initialize_camera(index=0, width=640, height=480):
     # v4l2-ctl を使ってサポートされる基本的な設定のみを適用
     try:
         subprocess.run(["v4l2-ctl", f"--set-fmt-video=width={width},height={height},pixelformat=MJPG"], check=False)
-        subprocess.run(["v4l2-ctl", "--set-parm=15"], check=False)
+        subprocess.run(["v4l2-ctl", "--set-parm=30"], check=False)
     except Exception as e:
         print(f"[WARN] Failed to apply v4l2-ctl settings: {e}")
 
@@ -77,7 +77,7 @@ def get_video_stream():
                     times.clear()
                 last_report = time.time()
 
-            #time.sleep(0.005)
+            time.sleep(0.005)
 
     finally:
         camera.release()
