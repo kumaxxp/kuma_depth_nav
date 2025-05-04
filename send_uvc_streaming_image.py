@@ -381,10 +381,10 @@ def depth_processing_thread():
                             print("[ERROR] Model returned no outputs")
                         else:
                             output = outputs[0]
+                            print(f"[INFO] Depth inference completed: shape={output.shape}")
                             
                             # 深度の可視化
                             depth_vis = visualize_depth(output, current_frame)
-                            print(f"[INFO] Depth visualization created: {depth_vis.shape}")
 
                             # 深度マップを点群に変換
                             points = depth_to_point_cloud(output)                           
