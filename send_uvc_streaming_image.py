@@ -303,10 +303,10 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
     try:
         height, width = depth_map.shape
         
-        # 深度マップの値をチェック
-        if np.isnan(depth_map).any() or np.isinf(depth_map).any():
-            print("[警告] 深度マップにNaNまたは無限大の値があります。修正します。")
-            depth_map = np.nan_to_num(depth_map, nan=0.0, posinf=10.0, neginf=0.0)
+#        # 深度マップの値をチェック
+#        if np.isnan(depth_map).any() or np.isinf(depth_map).any():
+#            print("[警告] 深度マップにNaNまたは無限大の値があります。修正します。")
+#            depth_map = np.nan_to_num(depth_map, nan=0.0, posinf=10.0, neginf=0.0)
             
 #        # データ範囲をチェック
 #        depth_min = np.min(depth_map)
