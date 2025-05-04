@@ -308,20 +308,20 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
             print("[警告] 深度マップにNaNまたは無限大の値があります。修正します。")
             depth_map = np.nan_to_num(depth_map, nan=0.0, posinf=10.0, neginf=0.0)
             
-#        # データ範囲をチェック
-#        depth_min = np.min(depth_map)
-#        depth_max = np.max(depth_map)
-#        if depth_min < 0 or depth_max > 100:  # 合理的な範囲をチェック
-#            print(f"[警告] 深度値が異常です: 最小={depth_min}, 最大={depth_max}")
-#            depth_map = np.clip(depth_map, 0.0, 10.0)  # 安全な範囲にクリップ
-#        
-#        # 画像座標のグリッドを作成
-#        x_grid, y_grid = np.meshgrid(np.arange(width), np.arange(height))
-#        
-#        # カメラ座標系に変換
-#        X = (x_grid - cx) * depth_map / fx
-#        Y = (y_grid - cy) * depth_map / fy
-#        Z = depth_map
+        # データ範囲をチェック
+        depth_min = np.min(depth_map)
+        depth_max = np.max(depth_map)
+        if depth_min < 0 or depth_max > 100:  # 合理的な範囲をチェック
+            print(f"[警告] 深度値が異常です: 最小={depth_min}, 最大={depth_max}")
+            depth_map = np.clip(depth_map, 0.0, 10.0)  # 安全な範囲にクリップ
+        
+        # 画像座標のグリッドを作成
+        x_grid, y_grid = np.meshgrid(np.arange(width), np.arange(height))
+        
+        # カメラ座標系に変換
+        X = (x_grid - cx) * depth_map / fx
+        Y = (y_grid - cy) * depth_map / fy
+        Z = depth_map
         
         # 形状を変形して点群に
 #        points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
