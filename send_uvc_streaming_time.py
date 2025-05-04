@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 import cv2
 import numpy as np
 import time
+import subprocess
 
 app = FastAPI()
 
@@ -21,6 +22,13 @@ async def root():
     """
 
 def initialize_camera(index=0, width=640, height=480):
+    # v4l2-ctl を使ってサポートされる基本的な設定のみを適用
+    try:
+        subprocess.run(["v4l2-ctl", f"--set-fmt-video=width={width},height={height},pixelformat=MJPG"], check=False)
+        subprocess.run(["v4l2-ctl", "--set-parm=15"], check=False)
+    except Exception as e:
+        print(f"[WARN] Failed to apply v4l2-ctl settings: {e}")
+
     cam = cv2.VideoCapture(index, cv2.CAP_V4L2)
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
@@ -69,7 +77,7 @@ def get_video_stream():
                     times.clear()
                 last_report = time.time()
 
-            time.sleep(0.005)
+            #time.sleep(0.005)
 
     finally:
         camera.release()

@@ -17,7 +17,7 @@ async def root():
         </head>
         <body>
             <h1>USBカメラの映像を表示中</h1>
-            <img src="/video" width="640" height="480" />
+            <img src="/video" width="1280" height="480" />
         </body>
     </html>
     """
@@ -40,13 +40,20 @@ def process_for_depth(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
     tensor = np.expand_dims(rgb, axis=0).astype(np.uint8)  # NHWC uint8
     return tensor
 
+def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
+    depth_feature = depth_map.squeeze()
+    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min() + 1e-6)
+    depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
+    depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
+    return depth_resized
+
 def get_video_stream():
     camera = initialize_camera()
     model = initialize_model(MODEL_PATH)
     input_name = model.get_inputs()[0].name
     times = []
     last_report = time.time()
-    
+
     cam_times, prep_times, infer_times, encode_times = [], [], [], []
 
     try:
@@ -60,8 +67,13 @@ def get_video_stream():
                 camera = initialize_camera()
                 continue
 
-            start = time.perf_counter()
+            # Skip stale frames from buffer
+            #for _ in range(3):
+            #    camera.grab()
+            #success, frame = camera.retrieve()
             success, frame = camera.read()
+
+            start = time.perf_counter()
             cam_time = time.perf_counter() - start
             cam_times.append(cam_time)
 
@@ -76,14 +88,19 @@ def get_video_stream():
                 prep_times.append(prep_time)
 
                 start = time.perf_counter()
-                _ = model.run(None, {input_name: input_tensor})
+                output = model.run(None, {input_name: input_tensor})[0]
                 infer_time = time.perf_counter() - start
                 infer_times.append(infer_time)
+
+                depth_vis = create_depth_visualization(output, frame)
             except Exception as e:
                 print(f"[ERROR] Depth model failed: {e}")
+                depth_vis = frame
+
+            combined = np.concatenate([frame, depth_vis], axis=1)
 
             start = time.perf_counter()
-            ret, buffer = cv2.imencode('.jpg', frame)
+            ret, buffer = cv2.imencode('.jpg', combined)
             encode_time = time.perf_counter() - start
             encode_times.append(encode_time)
 
