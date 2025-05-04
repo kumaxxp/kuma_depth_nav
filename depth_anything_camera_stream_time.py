@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import axengine as axe
 import time
+import traceback
 
 app = FastAPI()
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
@@ -23,59 +24,75 @@ async def root():
     """
 
 def initialize_model(model_path: str):
-    return axe.InferenceSession(model_path)
+    session = axe.InferenceSession(model_path)
+    input_info = session.get_inputs()[0]
+    print("[INFO] Model Input Shape:", input_info.shape)
+    print("[INFO] Model Input Dtype:", input_info.dtype)
+    return session
+
+def initialize_camera(index=0, width=640, height=480):
+    cam = cv2.VideoCapture(index, cv2.CAP_V4L2)
+    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    return cam
 
 def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
-    resized_frame = cv2.resize(frame, target_size)
-    return np.expand_dims(resized_frame[..., ::-1], axis=0)
+    if frame is None or frame.size == 0:
+        raise ValueError("Empty frame received.")
+
+    resized = cv2.resize(frame, target_size)
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    tensor = np.expand_dims(rgb, axis=0).astype(np.uint8)
+    if tensor.nbytes % np.dtype(np.uint8).itemsize != 0:
+        raise ValueError("[ERROR] Tensor buffer size not aligned with dtype")
+    return tensor
 
 def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
     depth_feature = depth_map.reshape(depth_map.shape[-2:])
-    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min())
+    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min() + 1e-6)
     depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
     depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
     return np.concatenate([original_frame, depth_resized], axis=1)
 
 def get_video_stream():
     session = initialize_model(MODEL_PATH)
-    input_name = session.get_inputs()[0].name
-    camera = cv2.VideoCapture(0)
+    input_info = session.get_inputs()[0]
+    input_name = input_info.name
+
+    camera = initialize_camera()
 
     try:
         while True:
-            # フレーム取得時間の計測
-            start = time.perf_counter()
             success, frame = camera.read()
-            camera_time = time.perf_counter() - start
 
-            if not success:
-                break
+            if not success or frame is None:
+                print("[WARN] Frame read failed")
+                continue
 
-            # 前処理時間の計測
-            start = time.perf_counter()
-            input_tensor = process_frame(frame)
-            preprocess_time = time.perf_counter() - start
+            try:
+                input_tensor = process_frame(frame)
+                depth_output_raw = session.run(None, {input_name: input_tensor})
 
-            # 推論時間の計測
-            start = time.perf_counter()
-            output = session.run(None, {input_name: input_tensor})
-            inference_time = time.perf_counter() - start
+                if not depth_output_raw or not isinstance(depth_output_raw[0], np.ndarray):
+                    print("[ERROR] Invalid output from model")
+                    continue
 
-            # 可視化時間の計測
-            start = time.perf_counter()
-            visualization = create_depth_visualization(output[0], frame)
-            visualization_time = time.perf_counter() - start
+                depth_output = depth_output_raw[0].squeeze()
+                if depth_output.ndim != 2:
+                    print(f"[ERROR] Unexpected depth output shape: {depth_output.shape}")
+                    continue
 
-            total_time = camera_time + preprocess_time + inference_time + visualization_time
+                visualization = create_depth_visualization(depth_output, frame)
 
-            print(f"Frame Times - Camera: {camera_time:.4f}s, Preprocess: {preprocess_time:.4f}s, "
-                  f"Inference: {inference_time:.4f}s, Visualization: {visualization_time:.4f}s, Total: {total_time:.4f}s")
+                _, buffer = cv2.imencode('.jpg', visualization)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
-            _, buffer = cv2.imencode('.jpg', visualization)
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-
-        #    time.sleep(0.005)
+            except Exception as e:
+                print(f"[ERROR] Frame processing failed: {e}")
+                traceback.print_exc()
+                continue
 
     finally:
         camera.release()
