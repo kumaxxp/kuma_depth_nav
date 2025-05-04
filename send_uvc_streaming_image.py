@@ -301,7 +301,7 @@ def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=192, cy=128):
         points: 3D点群 (N, 3)
     """
     try:
-        height, width = depth_map.shape
+#        height, width = depth_map.shape
         
 #        # 深度マップの値をチェック
 #        if np.isnan(depth_map).any() or np.isinf(depth_map).any():
