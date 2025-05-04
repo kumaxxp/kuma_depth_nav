@@ -99,6 +99,21 @@ def process_for_depth(frame: np.ndarray, target_size=(256, 192)) -> np.ndarray: 
         print(f"[ERROR] Failed to process frame for depth: {e}")
         return None
 
+def create_depth_visualization_ori(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
+    """深度マップの可視化を行う"""
+    depth_feature = depth_map.reshape(depth_map.shape[-2:])
+    
+    # 正規化と色付け
+    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min())
+    depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
+    
+    # 元の画像サイズにリサイズ
+    depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
+    
+    # 元画像と深度マップを横に並べる
+    return np.concatenate([original_frame, depth_resized], axis=1)
+
+
 def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
     try:
         if depth_map is None:
@@ -251,7 +266,8 @@ def depth_processing_thread():
                             print(f"[DEBUG] Inference complete in {time.time()-start_time:.2f}s, "
                                   f"output shape={output.shape}, type={output.dtype}")
                             
-                            depth_vis = create_depth_visualization(output, current_frame)
+                            #depth_vis = create_depth_visualization(output, current_frame)
+                            depth_vis = create_depth_visualization_ori(output, current_frame)
                             
                             # 深度マップを更新（スレッドセーフに）
                             with depth_lock:
