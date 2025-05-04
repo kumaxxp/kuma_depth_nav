@@ -111,7 +111,8 @@ def create_depth_visualization_ori(depth_map: np.ndarray, original_frame: np.nda
     depth_resized = cv2.resize(depth_colored, (original_frame.shape[1], original_frame.shape[0]))
     
     # 元画像と深度マップを横に並べる
-    return np.concatenate([original_frame, depth_resized], axis=1)
+#    return np.concatenate([original_frame, depth_resized], axis=1)
+    return np.concatenate([original_frame, depth_feature], axis=1)
 
 
 def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
