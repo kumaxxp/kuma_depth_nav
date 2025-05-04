@@ -124,7 +124,7 @@ def create_synthetic_depth(frame, pattern="random"):
     
     return depth_map
 
-def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray) -> np.ndarray:
+def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray, with_gradient_bar=False) -> np.ndarray:
     """深度マップのカラー表示を作成する"""
     try:
         depth_feature = depth_map.reshape(depth_map.shape[-2:])
@@ -161,7 +161,10 @@ def create_depth_visualization(depth_map: np.ndarray, original_frame: np.ndarray
             1
         )
         
-        # 境界線用のグラデーションバーを追加
+        if not with_gradient_bar:
+            return depth_resized
+        
+        # 境界線用のグラデーションバーを追加（必要な場合のみ）
         h, w = depth_resized.shape[:2]
         gradient_bar = np.zeros((20, w, 3), dtype=np.uint8)
         for x in range(w):
@@ -195,8 +198,8 @@ def save_depth_data(frame, depth_map, timestamp, output_dir):
     # RGBフレームを保存
     cv2.imwrite(rgb_filename, frame)
     
-    # 深度マップの可視化を保存
-    depth_vis = create_depth_visualization(depth_map, frame)
+    # 深度マップの可視化（保存用にはグラデーションバー付き）を保存
+    depth_vis = create_depth_visualization(depth_map, frame, with_gradient_bar=True)
     cv2.imwrite(depth_vis_filename, depth_vis)
     
     # 生の深度データをnumpy形式で保存（後処理用）
@@ -262,8 +265,8 @@ def depth_capture_main():
             # フレームからの合成深度マップを作成
             depth_map = create_synthetic_depth(frame, args.pattern)
             
-            # 深度マップの可視化
-            depth_vis = create_depth_visualization(depth_map, frame)
+            # 深度マップの可視化（表示用にはグラデーションバーなし）
+            depth_vis = create_depth_visualization(depth_map, frame, with_gradient_bar=False)
             
             # 表示用の画像を作成
             display_img = np.hstack([frame, depth_vis])
