@@ -78,7 +78,7 @@ def initialize_model(model_path: str):
         print(f"[ERROR] Model initialization failed: {e}")
         raise
 
-def process_for_depth(frame: np.ndarray, target_size=(256, 192)) -> np.ndarray:  # サイズ縮小
+def process_for_depth(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:  # サイズ縮小
     try:
         # 入力検証と詳細ログ
         if frame is None:
