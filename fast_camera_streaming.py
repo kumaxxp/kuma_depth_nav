@@ -169,7 +169,7 @@ def get_video_stream():
 
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.005)
+            time.sleep(0.001)
 
     finally:
         camera.release()
