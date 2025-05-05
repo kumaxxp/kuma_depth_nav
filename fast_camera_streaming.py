@@ -11,8 +11,16 @@ from contextlib import asynccontextmanager
 # カスタムモジュールのインポート
 from depth_processor import (
     DepthProcessor, create_depth_visualization, create_default_depth_image,
+    create_depth_grid_visualization,
     depth_to_point_cloud, create_top_down_occupancy_grid, visualize_occupancy_grid
 )
+
+# グローバル変数
+frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
+depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
+depth_data_queue = queue.Queue(maxsize=1)  # 深度データキュー
+topview_image_queue = queue.Queue(maxsize=1)  # トップビュー画像キュー
+depth_grid_queue = queue.Queue(maxsize=1)  # 深度グリッド画像キュー
 
 # axengine をインポート (機能チェック用)
 try:
@@ -44,10 +52,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # グローバル変数
-frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
-depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
-depth_data_queue = queue.Queue(maxsize=1)  # 深度データキュー
-topview_image_queue = queue.Queue(maxsize=1)  # トップビュー画像キュー
 process_thread = None
 is_running = True
 depth_processor = None  # 深度プロセッサ
@@ -69,6 +73,7 @@ async def root():
                 .stats { margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }
                 .refresh-btn { padding: 5px 10px; margin-top: 10px; cursor: pointer; }
                 .warning { color: red; text-align: center; padding: 10px; }
+                .row { display: flex; justify-content: center; flex-wrap: wrap; }
             </style>
         </head>
         <body>
@@ -78,7 +83,7 @@ async def root():
     # axengineがあるかどうかで表示内容を変える
     if HAS_AXENGINE:
         html_content += """
-            <div class="container">
+            <div class="row">
                 <div class="video-container">
                     <h3>RGB画像</h3>
                     <img src="/video" width="640" height="480" />
@@ -87,9 +92,15 @@ async def root():
                     <h3>深度推定</h3>
                     <img src="/depth_video" width="640" height="480" />
                 </div>
+            </div>
+            <div class="row">
                 <div class="video-container">
                     <h3>トップビュー</h3>
                     <img src="/topview" width="640" height="480" />
+                </div>
+                <div class="video-container">
+                    <h3>深度グリッド</h3>
+                    <img src="/depth_grid" width="640" height="480" />
                 </div>
             </div>
         """
@@ -283,6 +294,16 @@ def depth_processing_thread():
                     if depth_image_queue.full():
                         depth_image_queue.get_nowait()
                     depth_image_queue.put_nowait(colored_depth)
+                    
+                # 深度グリッド可視化も生成（毎フレーム）
+                depth_grid = create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6)
+                
+                # 深度グリッド画像をキューに追加
+                if depth_grid is not None and depth_grid.shape[0] > 0:
+                    if depth_grid_queue.full():
+                        depth_grid_queue.get_nowait()
+                    depth_grid_queue.put_nowait(depth_grid)
+                
             except Exception as e:
                 print(f"[WARN] Failed to visualize depth map: {e}")
 
@@ -332,6 +353,53 @@ def depth_processing_thread():
             time.sleep(1.0)  # エラー発生時は少し長めに待機
     
     print(f"[INFO] Depth processing thread stopped. Processed {frame_count} frames, skipped {skipped_frames} frames.")
+
+def get_depth_grid_stream():
+    """深度グリッド画像ストリームを生成します"""
+    try:
+        # デフォルトの深度グリッド画像（空のグリッド）を準備
+        default_grid_image = np.zeros((480, 640, 3), dtype=np.uint8) + 30
+        
+        # グリッド線を描画
+        for row in range(1, 6):
+            y = row * 80
+            cv2.line(default_grid_image, (0, y), (640, y), (100, 100, 100), 1)
+        
+        for col in range(1, 8):
+            x = col * 80
+            cv2.line(default_grid_image, (x, 0), (x, 480), (100, 100, 100), 1)
+        
+        # 最後に表示した有効な画像を保持
+        last_valid_grid_image = default_grid_image.copy()
+        
+        while True:
+            try:
+                # 深度グリッド画像があればそれを使用（キューから取り出さずに参照）
+                if not depth_grid_queue.empty():
+                    current_grid_image = depth_grid_queue.queue[0]  # キューから取り出さずに参照
+                    # 有効な画像なら最後の有効画像として保存
+                    if current_grid_image is not None and current_grid_image.shape[0] > 0:
+                        last_valid_grid_image = current_grid_image.copy()
+                
+                # 前回の有効な深度グリッド画像を使用
+                grid_image = last_valid_grid_image
+                    
+                # JPEGエンコード
+                ret, buffer = cv2.imencode('.jpg', grid_image)
+                if not ret:
+                    print("[WARN] JPEG encode failed for grid image.")
+                    continue
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                time.sleep(0.05)  # 更新は低いフレームレートでOK
+                
+            except Exception as e:
+                print(f"[ERROR] Error in depth grid stream: {e}")
+                time.sleep(0.1)
+    
+    except Exception as e:
+        print(f"[ERROR] Fatal error in depth grid stream: {e}")
 
 @app.get("/video")
 async def video_endpoint():
