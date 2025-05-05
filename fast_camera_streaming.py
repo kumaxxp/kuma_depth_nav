@@ -6,6 +6,7 @@ import time
 import threading
 import queue
 import logging
+from contextlib import asynccontextmanager
 
 # ロガー設定
 logging.basicConfig(
@@ -15,14 +16,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
-
 # グローバル変数
 frame_queue = queue.Queue(maxsize=10)  # フレームキュー
 process_thread = None  # 画像処理スレッド
 is_processing = False  # 処理スレッドの状態
 lock = threading.Lock()  # スレッドロック
 latest_processed_frame = None  # 処理済みフレーム
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPIアプリケーションのライフサイクルを管理します。
+    """
+    global is_processing, process_thread
+    
+    # アプリケーション起動時の処理
+    logger.info("Starting up...")
+    is_processing = True
+    process_thread = threading.Thread(target=processing_thread, daemon=True)
+    process_thread.start()
+    logger.info("Started processing thread.")
+    
+    yield
+    
+    # アプリケーション終了時の処理
+    logger.info("Shutting down...")
+    is_processing = False
+    if process_thread:
+        process_thread.join()
+    logger.info("Stopped processing thread.")
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -121,24 +145,6 @@ def processing_thread():
 async def video_endpoint():
     """ビデオストリームのエンドポイント"""
     return StreamingResponse(get_video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.on_event("startup")
-async def startup_event():
-    """アプリケーション起動時のイベント"""
-    global is_processing, process_thread
-    is_processing = True
-    process_thread = threading.Thread(target=processing_thread, daemon=True)
-    process_thread.start()
-    logger.info("Started processing thread.")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """アプリケーション終了時のイベント"""
-    global is_processing, process_thread
-    is_processing = False
-    if process_thread:
-        process_thread.join()
-    logger.info("Stopped processing thread.")
 
 if __name__ == "__main__":
     import uvicorn
