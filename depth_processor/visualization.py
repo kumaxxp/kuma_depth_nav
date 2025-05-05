@@ -28,6 +28,10 @@ def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
         min_depth = 0.0
         max_depth = 5.0  # デフォルト最大値
     
+    # 実際の深度値の範囲を保存（グラデーションバーの目盛り用）
+    actual_min_depth = min_depth
+    actual_max_depth = max_depth
+    
     # 正規化と色付け
     normalized = (depth_feature - min_depth) / (max_depth - min_depth + 1e-6)
     normalized = np.clip(normalized, 0, 1)  # 0-1の範囲に収める
@@ -75,9 +79,9 @@ def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
                 # 目盛り線
                 cv2.line(canvas, (tick_x, tick_y_top), (tick_x, tick_y_bottom), (255, 255, 255), 1)
                 
-                # 深度値ラベル
-                depth_val = min_depth + (max_depth - min_depth) * i / 5
-                label = f"{depth_val:.2f}m"
+                # 深度値ラベル - 生の深度値を使用
+                depth_val = actual_min_depth + (actual_max_depth - actual_min_depth) * i / 5
+                label = f"{depth_val:.2f}"  # メートル単位表記は省略
                 
                 # テキストサイズ取得
                 text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
@@ -89,7 +93,7 @@ def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
             
             # タイトル
-            title = "Depth (m)"
+            title = "Depth"  # 単位は省略
             title_size = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
             title_x = (original_shape[1] - title_size[0]) // 2
             title_y = original_shape[0] + 5
