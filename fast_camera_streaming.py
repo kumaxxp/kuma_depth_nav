@@ -8,7 +8,10 @@ import queue
 import os
 from contextlib import asynccontextmanager
 
-# axengine をインポート
+# カスタムモジュールのインポート
+from depth_processor import DepthProcessor, create_depth_visualization, create_default_depth_image
+
+# axengine をインポート (機能チェック用)
 try:
     import axengine as axe
     HAS_AXENGINE = True
@@ -37,16 +40,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# モデルパス
-MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
-
 # グローバル変数
 frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
 depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
 depth_data_queue = queue.Queue(maxsize=1)  # 深度データキュー
 process_thread = None
 is_running = True
-depth_model = None  # Depth Anythingモデル
+depth_processor = None  # 深度プロセッサ
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -104,44 +104,6 @@ async def root():
     
     return html_content
 
-def initialize_depth_model():
-    """Depth Anythingモデルを初期化"""
-    if not HAS_AXENGINE:
-        print("[WARN] axengine not installed. Cannot initialize depth model.")
-        return None
-        
-    try:
-        print(f"[INFO] Loading model from {MODEL_PATH}")
-        # axengineを使用してモデルをロード
-        session = axe.InferenceSession(MODEL_PATH)
-        print("[INFO] Model loaded successfully")
-        return session
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize depth model: {e}")
-        return None
-
-def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
-    """入力フレームの前処理を行う"""
-    if frame is None:
-        raise ValueError("フレームの読み込みに失敗しました")
-    
-    resized_frame = cv2.resize(frame, target_size)
-    # RGB -> BGR の変換とバッチ次元の追加
-    return np.expand_dims(resized_frame[..., ::-1], axis=0)
-
-def create_depth_visualization(depth_map: np.ndarray, original_shape) -> np.ndarray:
-    """深度マップの可視化を行う"""
-    depth_feature = depth_map.reshape(depth_map.shape[-2:])
-    
-    # 正規化と色付け
-    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min())
-    depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
-    
-    # 元の画像サイズにリサイズ
-    depth_resized = cv2.resize(depth_colored, (original_shape[1], original_shape[0]))
-    
-    return depth_resized
-
 def initialize_camera(index=0, width=640, height=480):
     """カメラを初期化します"""
     cam = cv2.VideoCapture(index, cv2.CAP_V4L2)
@@ -193,10 +155,8 @@ def get_video_stream():
 def get_depth_stream():
     """深度画像ストリームを生成します"""
     try:
-        # デフォルトの画像を用意 (青いグラデーション)
-        default_depth_image = np.zeros((480, 640, 3), dtype=np.uint8)
-        for i in range(480):
-            default_depth_image[i, :] = [0, 0, int(255 * i / 480)]
+        # デフォルトの深度画像を準備
+        default_depth_image = create_default_depth_image(640, 480)
         
         while True:
             try:
@@ -225,19 +185,15 @@ def get_depth_stream():
 
 def depth_processing_thread():
     """深度推論を行うスレッド"""
-    global is_running, depth_model
+    global is_running, depth_processor
     print("[INFO] Depth processing thread started")
     
-    # モデル初期化
-    depth_model = initialize_depth_model()
+    # 深度処理クラスの初期化
+    depth_processor = DepthProcessor()
     
-    if depth_model is None:
+    if not depth_processor.is_available():
         print("[ERROR] Failed to initialize depth model. Thread stopping.")
         return
-    
-    # 入力名の取得
-    input_name = depth_model.get_inputs()[0].name
-    print(f"[INFO] Model input name: {input_name}")
     
     frame_count = 0
     skipped_frames = 0
@@ -247,22 +203,8 @@ def depth_processing_thread():
             # キューからフレームを取得
             frame = frame_queue.get(timeout=1.0)
             
-        #    # 2フレームごとに処理（処理負荷軽減のため）
-        #    frame_count += 1
-        #    if frame_count % 2 != 0:
-        #        skipped_frames += 1
-        #        continue
-                
-            # 画像の前処理
-            start_time = time.time()
-            input_tensor = process_frame(frame)
-            
-            # 深度推論
-            output = depth_model.run(None, {input_name: input_tensor})
-            inference_time = time.time() - start_time
-            
-            # 深度マップを取得
-            depth_map = output[0]
+            # 深度推論実行
+            depth_map, inference_time = depth_processor.predict(frame)
                 
             # 深度データをキューに追加
             try:
@@ -282,9 +224,10 @@ def depth_processing_thread():
                 depth_image_queue.put_nowait(colored_depth)
             except:
                 pass
-                
-            #print(f"[INFO] Depth inference completed in {inference_time:.3f}s, "
-            #      f"shape: {depth_map.shape}")
+            
+            frame_count += 1
+            if frame_count % 20 == 0:  # 20フレームごとにログ出力
+                print(f"[INFO] Depth inference completed in {inference_time:.3f}s, shape: {depth_map.shape}")
             
         except queue.Empty:
             # タイムアウト - 何もしない
