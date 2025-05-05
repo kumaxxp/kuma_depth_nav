@@ -233,7 +233,7 @@ def depth_processing_thread():
             
             # 10フレームごとに処理（処理負荷軽減のため）
             frame_count += 1
-            if frame_count % 2 != 0:
+            if frame_count % 3 != 0:
                 skipped_frames += 1
                 continue
                 
