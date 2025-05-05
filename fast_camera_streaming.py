@@ -55,31 +55,25 @@ async def root():
         return """
         <html>
             <head>
-                <title>Camera Stream</title>
-            </head>
-            <body>
-                <h1>USBカメラ映像</h1>
-                <div>
-                    <img src="/video" width="640" height="480" />
-                </div>
-                <p style="color:red">axengine未インストールのため、深度推定は無効です。</p>
-            </body>
-        </html>
-        """
-    else:
-        return """
-        <html>
-            <head>
                 <title>Depth Camera Stream</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .container { display: flex; flex-wrap: wrap; justify-content: center; }
+                    .video-container { margin: 10px; text-align: center; }
+                    h1 { text-align: center; color: #333; }
+                    h3 { color: #555; }
+                    .stats { margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }
+                    .refresh-btn { padding: 5px 10px; margin-top: 10px; cursor: pointer; }
+                </style>
             </head>
             <body>
-                <h1>カメラ映像と深度推定</h1>
-                <div style="display: flex; justify-content: center;">
-                    <div style="margin-right: 20px;">
+                <h1>Depth Anything カメラストリーム</h1>
+                <div class="container">
+                    <div class="video-container">
                         <h3>RGB画像</h3>
                         <img src="/video" width="640" height="480" />
                     </div>
-                    <div>
+                    <div class="video-container">
                         <h3>深度推定</h3>
                         <img src="/depth_video" width="640" height="480" />
                     </div>
