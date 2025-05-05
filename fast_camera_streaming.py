@@ -267,8 +267,8 @@ def depth_processing_thread():
             except:
                 pass
                 
-            print(f"[INFO] Depth inference completed in {inference_time:.3f}s, "
-                  f"shape: {depth_map.shape}")
+            #print(f"[INFO] Depth inference completed in {inference_time:.3f}s, "
+            #      f"shape: {depth_map.shape}")
             
         except queue.Empty:
             # タイムアウト - 何もしない
