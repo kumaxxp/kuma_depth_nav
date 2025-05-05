@@ -416,6 +416,11 @@ async def topview_endpoint():
     """トップビュー画像ストリームのエンドポイント"""
     return StreamingResponse(get_topview_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+@app.get("/depth_grid")
+async def depth_grid_endpoint():
+    """深度グリッド画像ストリームのエンドポイント"""
+    return StreamingResponse(get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
 @app.get("/depth_metrics")
 async def depth_metrics():
     """深度推定の統計情報を取得"""
