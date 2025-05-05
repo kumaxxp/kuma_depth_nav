@@ -40,8 +40,8 @@ def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
         # グラデーションバーを追加
         if add_colorbar:
             # バーの位置とサイズ
-            bar_height = 50
-            bar_margin = 10
+            bar_height = 30
+            bar_margin = 30
             bar_width = original_shape[1] - 2 * bar_margin
             
             # キャンバスを拡大（下部にバーを追加するスペースを確保）
