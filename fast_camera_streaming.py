@@ -307,6 +307,24 @@ async def depth_video_endpoint():
     """深度画像ストリームのエンドポイント"""
     return StreamingResponse(get_depth_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+@app.get("/depth_metrics")
+async def depth_metrics():
+    """深度推定の統計情報を取得"""
+    if not depth_data_queue.empty():
+        depth_map = depth_data_queue.queue[0]  # キューからポップせずに参照
+        
+        # 深度マップの統計情報
+        metrics = {
+            "min_depth": float(depth_map.min()),
+            "max_depth": float(depth_map.max()),
+            "mean_depth": float(depth_map.mean()),
+            "shape": depth_map.shape,
+            "last_inference_time": time.time()
+        }
+        return metrics
+    else:
+        return {"error": "No depth data available"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8888)
