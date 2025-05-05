@@ -6,12 +6,20 @@ import time
 import threading
 import queue
 import os
-import torch
-import torchvision.transforms as transforms
-from PIL import Image
-import matplotlib.pyplot as plt
+
+# axengine をインポート
+try:
+    import axengine as axe
+    HAS_AXENGINE = True
+    print("[INFO] axengine successfully imported")
+except ImportError:
+    HAS_AXENGINE = False
+    print("[WARN] axengine is not installed. Running in basic mode without depth estimation.")
 
 app = FastAPI()
+
+# モデルパス
+MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
 
 # グローバル変数
 frame_queue = queue.Queue(maxsize=1)  # 最新のフレームだけを保持するキュー
@@ -21,81 +29,83 @@ process_thread = None
 is_running = True
 depth_model = None  # Depth Anythingモデル
 
-# モデル設定
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"[INFO] Using device: {DEVICE}")
-
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    return """
-    <html>
-        <head>
-            <title>Depth Camera Stream</title>
-        </head>
-        <body>
-            <h1>カメラ映像と深度推定</h1>
-            <div style="display: flex; justify-content: center;">
-                <div style="margin-right: 20px;">
-                    <h3>RGB画像</h3>
+    # axengine がなければシンプルな表示に
+    if not HAS_AXENGINE:
+        return """
+        <html>
+            <head>
+                <title>Camera Stream</title>
+            </head>
+            <body>
+                <h1>USBカメラ映像</h1>
+                <div>
                     <img src="/video" width="640" height="480" />
                 </div>
-                <div>
-                    <h3>深度推定</h3>
-                    <img src="/depth_video" width="640" height="480" />
+                <p style="color:red">axengine未インストールのため、深度推定は無効です。</p>
+            </body>
+        </html>
+        """
+    else:
+        return """
+        <html>
+            <head>
+                <title>Depth Camera Stream</title>
+            </head>
+            <body>
+                <h1>カメラ映像と深度推定</h1>
+                <div style="display: flex; justify-content: center;">
+                    <div style="margin-right: 20px;">
+                        <h3>RGB画像</h3>
+                        <img src="/video" width="640" height="480" />
+                    </div>
+                    <div>
+                        <h3>深度推定</h3>
+                        <img src="/depth_video" width="640" height="480" />
+                    </div>
                 </div>
-            </div>
-        </body>
-    </html>
-    """
+            </body>
+        </html>
+        """
 
 def initialize_depth_model():
     """Depth Anythingモデルを初期化"""
-    try:
-        print("[INFO] Loading Depth Anything model...")
+    if not HAS_AXENGINE:
+        print("[WARN] axengine not installed. Cannot initialize depth model.")
+        return None
         
-        # Depth Anything モデルを読み込む
-        # ここでは簡易的なモデル初期化の例を示します
-        # 実際には正しいパスとモデル設定が必要です
-        try:
-            # transformers libraryから読み込む場合
-            from transformers import AutoModelForDepthEstimation
-            model_id = "LiheYoung/depth-anything-small-hf"
-            model = AutoModelForDepthEstimation.from_pretrained(model_id)
-            model.to(DEVICE)
-            model.eval()
-            print("[INFO] Depth Anything model loaded successfully")
-            return model
-        except ImportError:
-            print("[WARN] Failed to import from transformers, trying custom implementation...")
-            
-            # 自前で実装する場合のスタブコード
-            # 実際のモデルに置き換えてください
-            class DummyDepthModel:
-                def __init__(self):
-                    pass
-                
-                def to(self, device):
-                    return self
-                
-                def eval(self):
-                    return self
-                
-                def __call__(self, x):
-                    # ダミー深度マップを返す
-                    h, w = x.shape[-2:]
-                    fake_depth = torch.zeros((1, 1, h, w), device=x.device)
-                    # 深度のグラデーションを生成
-                    for i in range(h):
-                        fake_depth[0, 0, i, :] = i / h
-                    return {"predicted_depth": fake_depth}
-            
-            model = DummyDepthModel()
-            print("[INFO] Dummy depth model initialized")
-            return model
-            
+    try:
+        print(f"[INFO] Loading model from {MODEL_PATH}")
+        # axengineを使用してモデルをロード
+        session = axe.InferenceSession(MODEL_PATH)
+        print("[INFO] Model loaded successfully")
+        return session
     except Exception as e:
         print(f"[ERROR] Failed to initialize depth model: {e}")
         return None
+
+def process_frame(frame: np.ndarray, target_size=(384, 256)) -> np.ndarray:
+    """入力フレームの前処理を行う"""
+    if frame is None:
+        raise ValueError("フレームの読み込みに失敗しました")
+    
+    resized_frame = cv2.resize(frame, target_size)
+    # RGB -> BGR の変換とバッチ次元の追加
+    return np.expand_dims(resized_frame[..., ::-1], axis=0)
+
+def create_depth_visualization(depth_map: np.ndarray, original_shape) -> np.ndarray:
+    """深度マップの可視化を行う"""
+    depth_feature = depth_map.reshape(depth_map.shape[-2:])
+    
+    # 正規化と色付け
+    normalized = (depth_feature - depth_feature.min()) / (depth_feature.max() - depth_feature.min())
+    depth_colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
+    
+    # 元の画像サイズにリサイズ
+    depth_resized = cv2.resize(depth_colored, (original_shape[1], original_shape[0]))
+    
+    return depth_resized
 
 def initialize_camera(index=0, width=640, height=480):
     """カメラを初期化します"""
@@ -178,36 +188,6 @@ def get_depth_stream():
     except Exception as e:
         print(f"[ERROR] Fatal error in depth stream: {e}")
 
-def preprocess_image(frame):
-    """画像を前処理してモデル入力用に変換"""
-    # PIL画像に変換
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_image = Image.fromarray(frame_rgb)
-    
-    # 前処理
-    preprocess = transforms.Compose([
-        transforms.Resize((384, 384)),  # モデルの入力サイズに合わせる
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                             std=[0.229, 0.224, 0.225])
-    ])
-    
-    input_tensor = preprocess(pil_image).unsqueeze(0)  # バッチ次元を追加
-    return input_tensor
-
-def colorize_depth(depth_map):
-    """深度マップをカラー画像に変換"""
-    # 正規化
-    depth_min = depth_map.min()
-    depth_max = depth_map.max()
-    normalized_depth = (depth_map - depth_min) / (depth_max - depth_min + 1e-8)
-    
-    # カラーマップの適用
-    colored = plt.cm.viridis(normalized_depth)  # viridisカラーマップを使用
-    colored = (colored[:, :, :3] * 255).astype(np.uint8)  # アルファチャンネルを除去し、uint8に変換
-    
-    return colored
-
 def depth_processing_thread():
     """深度推論を行うスレッド"""
     global is_running, depth_model
@@ -219,6 +199,10 @@ def depth_processing_thread():
     if depth_model is None:
         print("[ERROR] Failed to initialize depth model. Thread stopping.")
         return
+    
+    # 入力名の取得
+    input_name = depth_model.get_inputs()[0].name
+    print(f"[INFO] Model input name: {input_name}")
     
     frame_count = 0
     skipped_frames = 0
@@ -235,25 +219,16 @@ def depth_processing_thread():
                 continue
                 
             # 画像の前処理
-            input_tensor = preprocess_image(frame)
-            input_tensor = input_tensor.to(DEVICE)
+            start_time = time.time()
+            input_tensor = process_frame(frame)
             
             # 深度推論
-            with torch.no_grad():  # 勾配計算不要
-                start_time = time.time()
-                output = depth_model(input_tensor)
-                inference_time = time.time() - start_time
-                
-            # 深度マップを取得
-            if isinstance(output, dict) and "predicted_depth" in output:
-                depth_map = output["predicted_depth"]
-            else:
-                # モデル出力形式に合わせて調整
-                depth_map = output
-                
-            # GPU上のテンソルをCPUに移し、NumPy配列に変換
-            depth_map = depth_map.squeeze().cpu().numpy()
+            output = depth_model.run(None, {input_name: input_tensor})
+            inference_time = time.time() - start_time
             
+            # 深度マップを取得
+            depth_map = output[0]
+                
             # 深度データをキューに追加
             try:
                 if depth_data_queue.full():
@@ -262,23 +237,19 @@ def depth_processing_thread():
             except:
                 pass
             
-            # 深度マップをカラライズして可視化
-            colored_depth = colorize_depth(depth_map)
-            
-            # 元画像のサイズにリサイズ
-            h, w = frame.shape[:2]
-            colored_depth_resized = cv2.resize(colored_depth, (w, h))
+            # 深度マップを可視化
+            colored_depth = create_depth_visualization(depth_map, frame.shape)
             
             # 深度画像をキューに追加
             try:
                 if depth_image_queue.full():
                     depth_image_queue.get_nowait()
-                depth_image_queue.put_nowait(colored_depth_resized)
+                depth_image_queue.put_nowait(colored_depth)
             except:
                 pass
                 
-            print(f"[INFO] Depth inference completed in {inference_time:.3f}s, " 
-                  f"shape: {depth_map.shape}, range: {depth_map.min():.3f}-{depth_map.max():.3f}")
+            print(f"[INFO] Depth inference completed in {inference_time:.3f}s, "
+                  f"shape: {depth_map.shape}")
             
         except queue.Empty:
             # タイムアウト - 何もしない
