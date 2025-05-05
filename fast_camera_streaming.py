@@ -231,11 +231,11 @@ def depth_processing_thread():
             # キューからフレームを取得
             frame = frame_queue.get(timeout=1.0)
             
-            # 10フレームごとに処理（処理負荷軽減のため）
-            frame_count += 1
-            if frame_count % 3 != 0:
-                skipped_frames += 1
-                continue
+        #    # 2フレームごとに処理（処理負荷軽減のため）
+        #    frame_count += 1
+        #    if frame_count % 2 != 0:
+        #        skipped_frames += 1
+        #        continue
                 
             # 画像の前処理
             start_time = time.time()
