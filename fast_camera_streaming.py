@@ -50,37 +50,59 @@ depth_model = None  # Depth Anythingモデル
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    # axengine がなければシンプルな表示に
-    if not HAS_AXENGINE:
-        return """
-        <html>
-            <head>
-                <title>Depth Camera Stream</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px; }
-                    .container { display: flex; flex-wrap: wrap; justify-content: center; }
-                    .video-container { margin: 10px; text-align: center; }
-                    h1 { text-align: center; color: #333; }
-                    h3 { color: #555; }
-                    .stats { margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }
-                    .refresh-btn { padding: 5px 10px; margin-top: 10px; cursor: pointer; }
-                </style>
-            </head>
-            <body>
-                <h1>Depth Anything カメラストリーム</h1>
-                <div class="container">
-                    <div class="video-container">
-                        <h3>RGB画像</h3>
-                        <img src="/video" width="640" height="480" />
-                    </div>
-                    <div class="video-container">
-                        <h3>深度推定</h3>
-                        <img src="/depth_video" width="640" height="480" />
-                    </div>
+    """HTMLページを提供します"""
+    # 共通のHTMLテンプレート
+    html_content = """
+    <html>
+        <head>
+            <title>Depth Camera Stream</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .container { display: flex; flex-wrap: wrap; justify-content: center; }
+                .video-container { margin: 10px; text-align: center; }
+                h1 { text-align: center; color: #333; }
+                h3 { color: #555; }
+                .stats { margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }
+                .refresh-btn { padding: 5px 10px; margin-top: 10px; cursor: pointer; }
+                .warning { color: red; text-align: center; padding: 10px; }
+            </style>
+        </head>
+        <body>
+            <h1>Depth Anything カメラストリーム</h1>
+    """
+    
+    # axengineがあるかどうかで表示内容を変える
+    if HAS_AXENGINE:
+        html_content += """
+            <div class="container">
+                <div class="video-container">
+                    <h3>RGB画像</h3>
+                    <img src="/video" width="640" height="480" />
                 </div>
-            </body>
-        </html>
+                <div class="video-container">
+                    <h3>深度推定</h3>
+                    <img src="/depth_video" width="640" height="480" />
+                </div>
+            </div>
         """
+    else:
+        html_content += """
+            <p class="warning">axengine未インストールのため、深度推定は無効です。</p>
+            <div class="container">
+                <div class="video-container">
+                    <h3>RGB画像</h3>
+                    <img src="/video" width="640" height="480" />
+                </div>
+            </div>
+        """
+    
+    # 共通のフッター
+    html_content += """
+        </body>
+    </html>
+    """
+    
+    return html_content
 
 def initialize_depth_model():
     """Depth Anythingモデルを初期化"""
