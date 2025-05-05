@@ -166,13 +166,20 @@ def get_depth_stream():
         # デフォルトの深度画像を準備
         default_depth_image = create_default_depth_image(640, 480)
         
+        # 最後に表示した有効な画像を保持
+        last_valid_depth_image = default_depth_image.copy()
+        
         while True:
             try:
-                # 深度画像があればそれを使用、なければデフォルト画像
+                # 深度画像があればそれを使用（キューから取り出さずに参照）
                 if not depth_image_queue.empty():
-                    depth_image = depth_image_queue.get_nowait()
-                else:
-                    depth_image = default_depth_image.copy()
+                    current_depth_image = depth_image_queue.queue[0]  # キューから取り出さずに参照
+                    # 有効な画像なら最後の有効画像として保存
+                    if current_depth_image is not None and current_depth_image.shape[0] > 0:
+                        last_valid_depth_image = current_depth_image.copy()
+                
+                # 前回の有効な深度画像を使用
+                depth_image = last_valid_depth_image
                     
                 # JPEGエンコード
                 ret, buffer = cv2.imencode('.jpg', depth_image)
@@ -198,13 +205,20 @@ def get_topview_stream():
         default_grid = np.zeros((100, 100), dtype=np.uint8)  # 空の占有グリッド
         default_topview = visualize_occupancy_grid(default_grid)
         
+        # 最後に表示した有効な画像を保持
+        last_valid_topview = default_topview.copy()
+        
         while True:
             try:
-                # トップビュー画像があればそれを使用、なければデフォルト画像
+                # トップビュー画像があればそれを使用（キューから取り出さずに参照）
                 if not topview_image_queue.empty():
-                    topview_image = topview_image_queue.get_nowait()
-                else:
-                    topview_image = default_topview.copy()
+                    current_topview = topview_image_queue.queue[0]  # キューから取り出さずに参照
+                    # 有効な画像なら最後の有効画像として保存
+                    if current_topview is not None and current_topview.shape[0] > 0:
+                        last_valid_topview = current_topview.copy()
+                
+                # 前回の有効なトップビュー画像を使用
+                topview_image = last_valid_topview
                     
                 # JPEGエンコード
                 ret, buffer = cv2.imencode('.jpg', topview_image)
@@ -245,25 +259,32 @@ def depth_processing_thread():
             
             # 深度推論実行
             depth_map, inference_time = depth_processor.predict(frame)
+            
+            # 深度データが有効であることを確認
+            if depth_map is None or depth_map.size == 0:
+                print("[WARN] Empty depth map received. Skipping...")
+                continue
                 
-            # 深度データをキューに追加
+            # 深度データをキューに追加（新しい方式）
             try:
                 if depth_data_queue.full():
-                    depth_data_queue.get_nowait()
+                    depth_data_queue.get_nowait()  # 古い深度データを削除
                 depth_data_queue.put_nowait(depth_map)
-            except:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to update depth data queue: {e}")
             
             # 深度マップを可視化
-            colored_depth = create_depth_visualization(depth_map, frame.shape)
-            
-            # 深度画像をキューに追加
             try:
-                if depth_image_queue.full():
-                    depth_image_queue.get_nowait()
-                depth_image_queue.put_nowait(colored_depth)
-            except:
-                pass
+                colored_depth = create_depth_visualization(depth_map, frame.shape)
+                
+                # 可視化に成功したら深度画像をキューに追加
+                if colored_depth is not None and colored_depth.shape[0] > 0:
+                    # キューが空でなければ内容を更新（キューから取り出さずに内容を入れ替え）
+                    if depth_image_queue.full():
+                        depth_image_queue.get_nowait()
+                    depth_image_queue.put_nowait(colored_depth)
+            except Exception as e:
+                print(f"[WARN] Failed to visualize depth map: {e}")
 
             # 点群生成とトップビュー生成（5フレームごとに実行して負荷軽減）
             frame_count += 1
@@ -276,18 +297,26 @@ def depth_processing_thread():
                     cy = depth_map.shape[1] / 2  # 画像の中心Y
                     points = depth_to_point_cloud(depth_map, fx, fy, cx, cy)
                     
+                    # 点群が生成できなかった場合はスキップ
+                    if points is None or points.shape[0] == 0:
+                        print("[WARN] Empty point cloud. Skipping topview generation...")
+                        continue
+                    
                     # 占有グリッド生成
                     occupancy_grid = create_top_down_occupancy_grid(points)
                     
                     # トップビュー画像生成
                     topview_image = visualize_occupancy_grid(occupancy_grid)
                     
-                    # トップビュー画像をキューに追加
-                    if topview_image_queue.full():
-                        topview_image_queue.get_nowait()
-                    topview_image_queue.put_nowait(topview_image)
+                    # 画像が正常に生成されたらキューに追加
+                    if topview_image is not None and topview_image.shape[0] > 0:
+                        if topview_image_queue.full():
+                            topview_image_queue.get_nowait()
+                        topview_image_queue.put_nowait(topview_image)
                 except Exception as e:
                     print(f"[ERROR] Error generating topview: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # ログ出力（20フレームごと）
             if frame_count % 20 == 0:
