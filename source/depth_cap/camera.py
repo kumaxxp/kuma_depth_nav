@@ -4,6 +4,7 @@
 USBカメラの初期化、フレーム取得、リソース管理を担当します。
 """
 import cv2
+import numpy as np
 import time
 import logging
 import threading
