@@ -41,7 +41,7 @@ app = FastAPI(lifespan=lifespan)
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
 
 # グローバル変数
-frame_queue = queue.Queue(maxsize=1)  # 最新のフレームだけを保持するキュー
+frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
 depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
 depth_data_queue = queue.Queue(maxsize=1)  # 深度データキュー
 process_thread = None
