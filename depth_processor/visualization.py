@@ -88,7 +88,7 @@ def create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6, text_co
             cell_depth = depth_map[y_start:y_end, x_start:x_end]
             
             # 有効な深度値の平均を計算（0に近い値は無効として除外）
-            valid_depth = cell_depth[cell_depth > 0.1]
+            valid_depth = cell_depth[cell_depth > 0.001]
             if len(valid_depth) > 0:
                 avg_depth = np.mean(valid_depth)
             else:
