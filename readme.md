@@ -7,16 +7,22 @@ m5stack LLMモジュールで実装します。
 
 ```
 
-kuma_depth_nav/
-├── source/
-│   ├── depth_cap/
-│   │   ├── __init__.py     # ライブラリ初期化
-│   │   ├── camera.py       # カメラ関連機能
-│   │   ├── web_server.py   # WebサーバーAPI
-│   │   └── processor.py    # 画像処理クラス
-│   └── main.py             # メインアプリケーション
+c:\work\kuma_depth_nav\
+  |- fast_camera_streaming.py (メインアプリケーション - 更新)
+  |- depth_processor/
+     |- __init__.py (更新)
+     |- depth_model.py (既存)
+     |- visualization.py (既存)
+     |- point_cloud.py (新規) - 点群・トップビュー関連の処理
 
 ```
+
+1. depth_processor/point_cloud.py (新規)
+点群処理と占有グリッド生成に関連する関数を実装します。主な関数は：
+
++ depth_to_point_cloud: 深度マップから3D点群を生成
++ create_top_down_occupancy_grid: 点群から天頂視点の占有グリッドを生成
++ visualize_occupancy_grid: 占有グリッドをカラー画像として可視化
 
 ## 機能
 
@@ -26,5 +32,5 @@ kuma_depth_nav/
 4. 通過可能な経路を計算する
 5. 過去のデータと現在のデータから、どのようなスロットル・ステアリングを行うべきかを計算する
 
-現在、1を実装完了。ライブラリ化して2の機能を追加する。
+現在、2を実装完了。ライブラリ化して3の機能を追加する。
 

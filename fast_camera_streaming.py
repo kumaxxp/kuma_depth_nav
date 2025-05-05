@@ -9,7 +9,10 @@ import os
 from contextlib import asynccontextmanager
 
 # カスタムモジュールのインポート
-from depth_processor import DepthProcessor, create_depth_visualization, create_default_depth_image
+from depth_processor import (
+    DepthProcessor, create_depth_visualization, create_default_depth_image,
+    depth_to_point_cloud, create_top_down_occupancy_grid, visualize_occupancy_grid
+)
 
 # axengine をインポート (機能チェック用)
 try:
@@ -44,6 +47,7 @@ app = FastAPI(lifespan=lifespan)
 frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
 depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
 depth_data_queue = queue.Queue(maxsize=1)  # 深度データキュー
+topview_image_queue = queue.Queue(maxsize=1)  # トップビュー画像キュー
 process_thread = None
 is_running = True
 depth_processor = None  # 深度プロセッサ
@@ -82,6 +86,10 @@ async def root():
                 <div class="video-container">
                     <h3>深度推定</h3>
                     <img src="/depth_video" width="640" height="480" />
+                </div>
+                <div class="video-container">
+                    <h3>トップビュー</h3>
+                    <img src="/topview" width="640" height="480" />
                 </div>
             </div>
         """
@@ -147,7 +155,7 @@ def get_video_stream():
 
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.001)
+            time.sleep(0.001)  # スリープ時間を短縮
 
     finally:
         camera.release()
@@ -182,6 +190,38 @@ def get_depth_stream():
     
     except Exception as e:
         print(f"[ERROR] Fatal error in depth stream: {e}")
+
+def get_topview_stream():
+    """トップビュー画像ストリームを生成します"""
+    try:
+        # デフォルトのトップビュー画像（空の占有グリッド）を準備
+        default_grid = np.zeros((100, 100), dtype=np.uint8)  # 空の占有グリッド
+        default_topview = visualize_occupancy_grid(default_grid)
+        
+        while True:
+            try:
+                # トップビュー画像があればそれを使用、なければデフォルト画像
+                if not topview_image_queue.empty():
+                    topview_image = topview_image_queue.get_nowait()
+                else:
+                    topview_image = default_topview.copy()
+                    
+                # JPEGエンコード
+                ret, buffer = cv2.imencode('.jpg', topview_image)
+                if not ret:
+                    print("[WARN] JPEG encode failed for topview image.")
+                    continue
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                time.sleep(0.05)  # トップビュー更新は低いフレームレートでOK
+                
+            except Exception as e:
+                print(f"[ERROR] Error in topview stream: {e}")
+                time.sleep(0.1)
+    
+    except Exception as e:
+        print(f"[ERROR] Fatal error in topview stream: {e}")
 
 def depth_processing_thread():
     """深度推論を行うスレッド"""
@@ -224,9 +264,33 @@ def depth_processing_thread():
                 depth_image_queue.put_nowait(colored_depth)
             except:
                 pass
-            
+
+            # 点群生成とトップビュー生成（5フレームごとに実行して負荷軽減）
             frame_count += 1
-            if frame_count % 20 == 0:  # 20フレームごとにログ出力
+            if frame_count % 5 == 0:
+                try:
+                    # 深度マップから点群生成
+                    fx = 500  # カメラの焦点距離（推定値）
+                    fy = 500
+                    cx = depth_map.shape[2] / 2  # 画像の中心X
+                    cy = depth_map.shape[1] / 2  # 画像の中心Y
+                    points = depth_to_point_cloud(depth_map, fx, fy, cx, cy)
+                    
+                    # 占有グリッド生成
+                    occupancy_grid = create_top_down_occupancy_grid(points)
+                    
+                    # トップビュー画像生成
+                    topview_image = visualize_occupancy_grid(occupancy_grid)
+                    
+                    # トップビュー画像をキューに追加
+                    if topview_image_queue.full():
+                        topview_image_queue.get_nowait()
+                    topview_image_queue.put_nowait(topview_image)
+                except Exception as e:
+                    print(f"[ERROR] Error generating topview: {e}")
+            
+            # ログ出力（20フレームごと）
+            if frame_count % 20 == 0:
                 print(f"[INFO] Depth inference completed in {inference_time:.3f}s, shape: {depth_map.shape}")
             
         except queue.Empty:
@@ -249,6 +313,11 @@ async def video_endpoint():
 async def depth_video_endpoint():
     """深度画像ストリームのエンドポイント"""
     return StreamingResponse(get_depth_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/topview")
+async def topview_endpoint():
+    """トップビュー画像ストリームのエンドポイント"""
+    return StreamingResponse(get_topview_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/depth_metrics")
 async def depth_metrics():
