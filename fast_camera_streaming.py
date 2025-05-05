@@ -6,6 +6,7 @@ import time
 import threading
 import queue
 import os
+from contextlib import asynccontextmanager
 
 # axengine をインポート
 try:
@@ -16,7 +17,25 @@ except ImportError:
     HAS_AXENGINE = False
     print("[WARN] axengine is not installed. Running in basic mode without depth estimation.")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションのライフスパン管理"""
+    global process_thread, is_running
+    
+    # 起動時処理
+    process_thread = threading.Thread(target=depth_processing_thread, daemon=True)
+    process_thread.start()
+    print("[INFO] Started depth processing thread")
+    
+    yield  # アプリケーション実行中
+    
+    # 終了時処理
+    is_running = False
+    if process_thread:
+        process_thread.join(timeout=2.0)
+    print("[INFO] Stopped depth processing thread")
+
+app = FastAPI(lifespan=lifespan)
 
 # モデルパス
 MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
@@ -269,23 +288,6 @@ async def video_endpoint():
 async def depth_video_endpoint():
     """深度画像ストリームのエンドポイント"""
     return StreamingResponse(get_depth_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.on_event("startup")
-async def startup_event():
-    """アプリケーション起動時に処理スレッドを開始"""
-    global process_thread
-    process_thread = threading.Thread(target=depth_processing_thread, daemon=True)
-    process_thread.start()
-    print("[INFO] Started depth processing thread")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """アプリケーション終了時に処理スレッドを停止"""
-    global is_running
-    is_running = False
-    if process_thread:
-        process_thread.join(timeout=2.0)  # 最大2秒待機
-    print("[INFO] Stopped depth processing thread")
 
 if __name__ == "__main__":
     import uvicorn
