@@ -275,7 +275,9 @@ def depth_processing_thread():
             pass
         except Exception as e:
             print(f"[ERROR] Error in depth processing thread: {e}")
-            time.sleep(0.5)
+            import traceback
+            traceback.print_exc()  # スタックトレースを出力
+            time.sleep(1.0)  # エラー発生時は少し長めに待機
     
     print(f"[INFO] Depth processing thread stopped. Processed {frame_count} frames, skipped {skipped_frames} frames.")
 
