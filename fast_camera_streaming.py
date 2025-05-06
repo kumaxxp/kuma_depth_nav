@@ -82,7 +82,7 @@ depth_processor = None  # 深度プロセッサ
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """HTMLページを提供します"""
-    # 共通のHTMLテンプレート
+    # シンプルなHTMLテンプレート
     html_content = """
     <!DOCTYPE html>
     <html>
@@ -121,6 +121,12 @@ async def root():
                 padding: 10px;
                 background-color: #e6f7ff;
                 border-left: 4px solid #1890ff;
+            }
+            .warning {
+                background-color: #fff7e6;
+                border-left: 4px solid #fa8c16;
+                padding: 10px;
+                margin: 10px 0;
             }
         </style>
     </head>
@@ -167,56 +173,15 @@ async def root():
                     statusBar.style.borderLeft = '4px solid #f5222d';
                 };
                 
-                // 定期的に画像をリロード
+                // 定期的に画像をリロード（負荷軽減のため10秒に1回）
                 setInterval(() => {
                     const currentSrc = img.src;
                     if (!img.currentSrc || img.currentSrc.includes('error.jpg')) return;
                     img.src = currentSrc.split('?')[0] + '?' + new Date().getTime();
-                }, 5000);  // 5秒ごとにリロード
+                }, 10000);  // 10秒ごとにリロード
             });
         </script>
     </body>
-    </html>
-    """
-    
-    # axengineがあるかどうかで表示内容を変える
-    if HAS_AXENGINE:
-        html_content += """
-            <div class="row">
-                <div class="video-container">
-                    <h3>RGB画像</h3>
-                    <img src="/video" width="640" height="480" />
-                </div>
-                <div class="video-container">
-                    <h3>深度推定</h3>
-                    <img src="/depth_video" width="640" height="480" />
-                </div>
-            </div>
-            <div class="row">
-                <div class="video-container">
-                    <h3>トップビュー</h3>
-                    <img src="/topview" width="640" height="480" />
-                </div>
-                <div class="video-container">
-                    <h3>深度グリッド</h3>
-                    <img src="/depth_grid" width="640" height="480" />
-                </div>
-            </div>
-        """
-    else:
-        html_content += """
-            <p class="warning">axengine未インストールのため、深度推定は無効です。</p>
-            <div class="container">
-                <div class="video-container">
-                    <h3>RGB画像</h3>
-                    <img src="/video" width="640" height="480" />
-                </div>
-            </div>
-        """
-    
-    # 共通のフッター
-    html_content += """
-        </body>
     </html>
     """
     
