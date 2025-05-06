@@ -1,0 +1,24 @@
+{
+  "camera": {
+    "device_index": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "use_v4l2": true
+  },
+  
+  "depth": {
+    "model_type": "DINOv2",
+    "width": 640,
+    "height": 480,
+    "use_gpu": true,
+    "visualization_min": 0.1,
+    "visualization_max": 0.9
+  },
+  
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": false
+  }
+}
