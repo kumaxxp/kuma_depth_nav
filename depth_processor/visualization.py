@@ -122,98 +122,74 @@ def create_default_depth_image(width=640, height=480):
         default_depth_image[i, :] = [0, 0, int(255 * i / height)]
     return default_depth_image
 
-def create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6, text_color=(255, 255, 255)):
+def create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6, scaling_factor=15.0):
     """
-    深度マップをグリッドに分割し、各セルの平均深度値を表示する可視化を作成
+    深度マップからグリッド表示を生成する
     
     Args:
-        depth_map: 深度マップ
-        grid_cols: 横方向の分割数
-        grid_rows: 縦方向の分割数
-        text_color: テキスト色 (BGR形式)
+        depth_map: 深度データ
+        grid_cols: グリッドの列数
+        grid_rows: グリッドの行数
+        scaling_factor: 絶対深度変換のためのスケーリング係数
         
     Returns:
-        可視化された画像
+        可視化されたグリッド画像
     """
-    # 深度マップの形状を取得
-    if len(depth_map.shape) > 2:
-        depth_map = depth_map.squeeze()  # バッチ次元や不要な次元を除去
+    if depth_map is None or depth_map.size == 0:
+        return create_default_depth_image()
         
-    height, width = depth_map.shape
+    depth_feature = depth_map.reshape(depth_map.shape[-2:])
     
-    # 出力画像を作成（やや暗めの背景）
-    visualization = np.zeros((480, 640, 3), dtype=np.uint8) + 30
+    # 画像全体の大きさを定義
+    h, w = depth_feature.shape
+    cell_h, cell_w = h // grid_rows, w // grid_cols
     
-    # セルの幅と高さを計算
-    cell_width = width // grid_cols
-    cell_height = height // grid_rows
+    # グリッド画像を作成（黒背景）
+    grid_image = np.zeros((h, w, 3), dtype=np.uint8)
     
-    # ビジュアライゼーションのセルサイズ
-    vis_cell_width = 640 // grid_cols
-    vis_cell_height = 480 // grid_rows
-    
-    # 各セルの平均深度を計算して表示
+    # 各グリッドセルごとの処理
     for row in range(grid_rows):
         for col in range(grid_cols):
-            # 元の深度マップのセル領域
-            y_start = row * cell_height
-            y_end = min((row + 1) * cell_height, height)
-            x_start = col * cell_width
-            x_end = min((col + 1) * cell_width, width)
+            # セル範囲の定義
+            y1, y2 = row * cell_h, (row + 1) * cell_h
+            x1, x2 = col * cell_w, (col + 1) * cell_w
             
-            # この領域の深度値を抽出
-            cell_depth = depth_map[y_start:y_end, x_start:x_end]
+            # セル内の深度の平均値を計算（無効値は除外）
+            cell_depth = depth_feature[y1:y2, x1:x2]
+            valid_depths = cell_depth[cell_depth > 0.01]
             
-            # 有効な深度値の平均を計算（0に近い値は無効として除外）
-            valid_depth = cell_depth[cell_depth > 0.001]
-            if len(valid_depth) > 0:
-                avg_depth = np.mean(valid_depth)
-            else:
-                avg_depth = 0
-            
-            # ビジュアライゼーションのセル座標
-            vis_y_start = row * vis_cell_height
-            vis_y_end = (row + 1) * vis_cell_height
-            vis_x_start = col * vis_cell_width
-            vis_x_end = (col + 1) * vis_cell_width
-            
-            # 深度値に応じた色を決定
-            if avg_depth > 0:
-                # 遠いほど赤、近いほど青
-                normalized_depth = min(avg_depth / 5.0, 1.0)  # 5mを最大とする
-                b = int(255 * (1.0 - normalized_depth))
-                r = int(255 * normalized_depth)
-                color = (b, 80, r)  # BGR形式
+            if len(valid_depths) > 0:
+                avg_depth = np.mean(valid_depths)
+                
+                # 相対深度から絶対深度（メートル）へ変換
+                abs_depth = scaling_factor / avg_depth if avg_depth > 0.01 else 0
+                
+                # 深度に基づいて色を決定（近い=赤、遠い=青）
+                # 絶対深度を0-10mの範囲で正規化（10m以上は10mとして扱う）
+                normalized_depth = min(abs_depth, 10.0) / 10.0
+                
+                # カラーマップの適用（HSV色空間で青から赤へ）
+                color = cv2.applyColorMap(np.array([[int(255 * (1 - normalized_depth))]], dtype=np.uint8), 
+                                         cv2.COLORMAP_JET)[0, 0]
                 
                 # セルを塗りつぶし
-                visualization[vis_y_start:vis_y_end, vis_x_start:vis_x_end] = color
+                grid_image[y1:y2, x1:x2] = color
                 
-                # 平均深度値をテキストとして表示
-                text = f"{avg_depth:.2f}m"
-                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-                text_x = vis_x_start + (vis_cell_width - text_size[0]) // 2
-                text_y = vis_y_start + (vis_cell_height + text_size[1]) // 2
-                cv2.putText(visualization, text, (text_x, text_y), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1, cv2.LINE_AA)
-            else:
-                # データがない領域はダークグレー
-                visualization[vis_y_start:vis_y_end, vis_x_start:vis_x_end] = (30, 30, 30)
-                
-                # "N/A"と表示
-                text = "N/A"
-                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-                text_x = vis_x_start + (vis_cell_width - text_size[0]) // 2
-                text_y = vis_y_start + (vis_cell_height + text_size[1]) // 2
-                cv2.putText(visualization, text, (text_x, text_y), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
+                # 深度値をテキストで表示（メートル単位）
+                text = f"{abs_depth:.1f}m"
+                text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                text_x = x1 + (cell_w - text_size[0]) // 2
+                text_y = y1 + (cell_h + text_size[1]) // 2
+                cv2.putText(grid_image, text, (text_x, text_y), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     
     # グリッド線を描画
-    for row in range(1, grid_rows):
-        y = row * vis_cell_height
-        cv2.line(visualization, (0, y), (640, y), (100, 100, 100), 1)
-    
-    for col in range(1, grid_cols):
-        x = col * vis_cell_width
-        cv2.line(visualization, (x, 0), (x, 480), (100, 100, 100), 1)
+    for row in range(grid_rows + 1):
+        y = row * cell_h
+        cv2.line(grid_image, (0, y), (w, y), (100, 100, 100), 1)
         
-    return visualization
+    for col in range(grid_cols + 1):
+        x = col * cell_w
+        cv2.line(grid_image, (x, 0), (x, h), (100, 100, 100), 1)
+    
+    return grid_image
