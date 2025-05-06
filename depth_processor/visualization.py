@@ -118,7 +118,7 @@ def depth_to_color(depth_normalized):
 
 def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8, 8), max_distance=10.0, cell_size=60):
     """
-    深度マップをグリッド形式で可視化（改善版）
+    深度マップをグリッド形式で可視化
     
     Args:
         depth_map: 深度マップ（相対深度）
@@ -130,40 +130,20 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
     Returns:
         numpy.ndarray: グリッド可視化画像
     """
+    import cv2
+    import numpy as np
+    
     rows, cols = grid_size
     h, w = depth_map.shape[:2] if len(depth_map.shape) > 2 else depth_map.shape
-    
-    # 絶対深度がない場合は作成
-    if absolute_depth is None:
-        try:
-            # スケーリング係数でメートル単位に変換
-            absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor=15.0)
-            logger.debug("Created absolute depth from relative depth")
-        except Exception as e:
-            logger.error(f"Error converting to absolute depth: {e}")
-            return np.zeros((rows * cell_size, cols * cell_size, 3), dtype=np.uint8) + 30
-            
-    # グリッド分割のためのインデックス計算
-    row_indices = np.linspace(0, h-1, rows+1).astype(int)
-    col_indices = np.linspace(0, w-1, cols+1).astype(int)
-    
-    # デバッグ: 深度値の範囲を確認
-    try:
-        valid_depths = absolute_depth[absolute_depth > 0.01]
-        if valid_depths.size > 0:
-            min_depth = valid_depths.min()
-            max_depth = valid_depths.max()
-            mean_depth = valid_depths.mean()
-            logger.debug(f"Depth range: min={min_depth:.2f}m, max={max_depth:.2f}m, mean={mean_depth:.2f}m")
-        else:
-            logger.warning("No valid depth values found")
-    except Exception as e:
-        logger.error(f"Error analyzing depth data: {e}")
     
     # 出力画像の初期化
     output_h = rows * cell_size
     output_w = cols * cell_size
     output = np.zeros((output_h, output_w, 3), dtype=np.uint8) + 30  # ダークグレー背景
+    
+    # グリッド分割のためのインデックス計算
+    row_indices = np.linspace(0, h-1, rows+1).astype(int)
+    col_indices = np.linspace(0, w-1, cols+1).astype(int)
     
     # テキスト設定
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -177,18 +157,126 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             r_start, r_end = row_indices[i], row_indices[i+1]
             c_start, c_end = col_indices[j], col_indices[j+1]
             
-            # セルの深度値を取得 - より多くのピクセルを取得するため、境界を少し拡張
-            r_start_exp = max(0, r_start - 5)
-            r_end_exp = min(h, r_end + 5)
-            c_start_exp = max(0, c_start - 5)
-            c_end_exp = min(w, c_end + 5)
+            # セルの領域を拡張（境界線上の点を含める）
+            r_start_ext = max(0, r_start - 2)
+            r_end_ext = min(h, r_end + 2)
+            c_start_ext = max(0, c_start - 2)
+            c_end_ext = min(w, c_end + 2)
             
-            cell_depth = absolute_depth[r_start_exp:r_end_exp, c_start_exp:c_end_exp]
+            # セルの深度値を取得
+            if absolute_depth is not None:
+                # 絶対深度から直接取得
+                cell_depth = absolute_depth[r_start_ext:r_end_ext, c_start_ext:c_end_ext]
+                # 無効な値をフィルタ（0.1m〜30mの範囲）
+                valid_depth = cell_depth[(cell_depth >= 0.1) & (cell_depth <= 30.0)]
+            else:
+                # 相対深度から計算
+                cell_depth = depth_map[r_start_ext:r_end_ext, c_start_ext:c_end_ext]
+                # 無効な値をフィルタ
+                valid_depth = cell_depth[cell_depth > 0.01]
+                # 絶対深度に変換（簡易的なスケーリング）
+                if valid_depth.size > 0:
+                    valid_depth = 15.0 / valid_depth
+                    # 範囲外の値をフィルタ
+                    valid_depth = valid_depth[(valid_depth >= 0.1) & (valid_depth <= 30.0)]
             
-            # 有効な深度値の条件を緩和（0.1m〜15mの範囲で有効と判断）
-            valid_depth = cell_depth[(cell_depth > 0.1) & (cell_depth < 15.0)]
-            
+            # セルの位置
             cell_y_start = i * cell_size
             cell_x_start = j * cell_size
             
-            # データ量の閾値を下げる（より少ないデータでも有効と判断）
+            # 有効なデータがあるかどうか
+            if valid_depth.size > 5:  # 最低5ピクセルは必要
+                # 外れ値を除外するため、25%トリミーン平均を使用
+                sorted_depths = np.sort(valid_depth.flatten())
+                trim_size = max(1, int(sorted_depths.size * 0.25))
+                if sorted_depths.size > trim_size*2:
+                    trimmed = sorted_depths[trim_size:-trim_size]
+                    avg_depth = np.mean(trimmed)
+                else:
+                    avg_depth = np.mean(sorted_depths)
+                
+                # 深度に応じた色を設定
+                norm_depth = min(avg_depth / max_distance, 1.0)
+                
+                # HSV色空間で色を生成（近いほど赤、遠いほど青）
+                hue = int(120 - 120 * norm_depth)  # 0(赤)〜120(青)
+                sat = 240
+                val = 220
+                
+                # HSV -> BGR変換
+                hsv_color = np.array([[[hue, sat, val]]], dtype=np.uint8)
+                bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0][0]
+                color = (int(bgr_color[0]), int(bgr_color[1]), int(bgr_color[2]))
+                
+                # セルを描画
+                cv2.rectangle(
+                    output, 
+                    (cell_x_start + 2, cell_y_start + 2), 
+                    (cell_x_start + cell_size - 2, cell_y_start + cell_size - 2),
+                    color, 
+                    -1
+                )
+                
+                # 数値を表示
+                text = f"{avg_depth:.1f}m"
+                text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+                text_x = cell_x_start + (cell_size - text_size[0]) // 2
+                text_y = cell_y_start + (cell_size + text_size[1]) // 2
+                
+                # テキストの縁取り（読みやすさ向上）
+                cv2.putText(
+                    output, 
+                    text, 
+                    (text_x, text_y), 
+                    font, 
+                    font_scale, 
+                    (0, 0, 0),  # 黒（縁取り）
+                    font_thickness + 2
+                )
+                
+                # テキスト本体
+                cv2.putText(
+                    output, 
+                    text, 
+                    (text_x, text_y), 
+                    font, 
+                    font_scale, 
+                    (255, 255, 255),  # 白
+                    font_thickness
+                )
+            else:
+                # データが不足している場合は灰色のセル
+                cv2.rectangle(
+                    output, 
+                    (cell_x_start + 2, cell_y_start + 2), 
+                    (cell_x_start + cell_size - 2, cell_y_start + cell_size - 2),
+                    (80, 80, 80),  # 暗い灰色
+                    -1
+                )
+                
+                # 数値がないことを示す
+                text = "---"
+                text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+                text_x = cell_x_start + (cell_size - text_size[0]) // 2
+                text_y = cell_y_start + (cell_size + text_size[1]) // 2
+                
+                cv2.putText(
+                    output, 
+                    text, 
+                    (text_x, text_y), 
+                    font, 
+                    font_scale, 
+                    (150, 150, 150),  # 明るい灰色
+                    font_thickness
+                )
+    
+    # グリッド線を描画
+    for i in range(rows+1):
+        y = i * cell_size
+        cv2.line(output, (0, y), (output_w, y), (50, 50, 50), 1)
+    
+    for j in range(cols+1):
+        x = j * cell_size
+        cv2.line(output, (x, 0), (x, output_h), (50, 50, 50), 1)
+    
+    return output
