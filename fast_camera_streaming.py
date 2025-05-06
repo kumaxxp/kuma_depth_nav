@@ -566,9 +566,9 @@ def get_depth_grid_stream():
         
         while True:
             try:
-                # 深度グリッド画像があればそれを使用（キューから取り出さずに参照）
-                if not depth_grid_queue.empty():
-                    current_grid_image = depth_grid_queue.queue[0]  # キューから取り出さずに参照
+                # 修正: depth_grid_queue → depth_grid_image_queue
+                if not depth_grid_image_queue.empty():
+                    current_grid_image = depth_grid_image_queue.queue[0]  # キューから取り出さずに参照
                     # 有効な画像なら最後の有効画像として保存
                     if current_grid_image is not None and current_grid_image.shape[0] > 0:
                         last_valid_grid_image = current_grid_image.copy()
@@ -579,7 +579,7 @@ def get_depth_grid_stream():
                 # JPEGエンコード
                 ret, buffer = cv2.imencode('.jpg', grid_image)
                 if not ret:
-                    print("[WARN] JPEG encode failed for grid image.")
+                    logger.warning("JPEG encode failed for grid image.")  # printもloggerに変更
                     continue
                 
                 yield (b'--frame\r\n'
@@ -587,11 +587,11 @@ def get_depth_grid_stream():
                 time.sleep(0.05)  # 更新は低いフレームレートでOK
                 
             except Exception as e:
-                print(f"[ERROR] Error in depth grid stream: {e}")
+                logger.error(f"Error in depth grid stream: {e}")  # printもloggerに変更
                 time.sleep(0.1)
     
     except Exception as e:
-        print(f"[ERROR] Fatal error in depth grid stream: {e}")
+        logger.error(f"Fatal error in depth grid stream: {e}")  # printもloggerに変更
 
 @app.get("/video")
 async def video_endpoint():
