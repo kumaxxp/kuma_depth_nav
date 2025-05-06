@@ -14,7 +14,8 @@
     "visualization_min": 0.1,
     "visualization_max": 0.9,
     "fx": 500,
-    "fy": 500
+    "fy": 500,
+    "scaling_factor": 15.0
   },
   "server": {
     "host": "0.0.0.0",

@@ -280,11 +280,14 @@ def depth_processing_thread():
     depth_processor = DepthProcessor()
     
     if not depth_processor.is_available():
-        print("[ERROR] Failed to initialize depth model. Thread stopping.")
+        logger.error("Failed to initialize depth model. Thread stopping.")
         return
     
     frame_count = 0
     skipped_frames = 0
+    
+    # 設定から絶対深度変換のスケーリング係数を取得
+    scaling_factor = config["depth"].get("scaling_factor", 15.0)
     
     while is_running:
         try:
@@ -296,39 +299,48 @@ def depth_processing_thread():
             
             # 深度データが有効であることを確認
             if depth_map is None or depth_map.size == 0:
-                print("[WARN] Empty depth map received. Skipping...")
+                logger.warning("Empty depth map received. Skipping...")
                 continue
+            
+            # オプション: 相対深度から絶対深度への変換
+            # absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor)
                 
-            # 深度データをキューに追加（新しい方式）
+            # 深度データをキューに追加（最適化版）
             try:
-                if depth_data_queue.full():
-                    depth_data_queue.get_nowait()  # 古い深度データを削除
-                depth_data_queue.put_nowait(depth_map)
+                with depth_data_queue.mutex:  # キューのロックを取得
+                    if depth_data_queue.full():
+                        depth_data_queue.queue.clear()  # キューを空にする（コピーなし）
+                    depth_data_queue.queue.append(depth_map)  # 新しいデータを追加
+                    depth_data_queue.not_empty.notify()  # 待機中のスレッドに通知
             except Exception as e:
-                print(f"[WARN] Failed to update depth data queue: {e}")
+                logger.warning(f"Failed to update depth data queue: {e}")
             
             # 深度マップを可視化
             try:
+                # 軽量化のためcopy操作を最小限に
                 colored_depth = create_depth_visualization(depth_map, frame.shape)
                 
-                # 可視化に成功したら深度画像をキューに追加
+                # 可視化に成功したら深度画像をキューに追加（最適化版）
                 if colored_depth is not None and colored_depth.shape[0] > 0:
-                    # キューが空でなければ内容を更新（キューから取り出さずに内容を入れ替え）
-                    if depth_image_queue.full():
-                        depth_image_queue.get_nowait()
-                    depth_image_queue.put_nowait(colored_depth)
+                    with depth_image_queue.mutex:
+                        if depth_image_queue.full():
+                            depth_image_queue.queue.clear()
+                        depth_image_queue.queue.append(colored_depth)
+                        depth_image_queue.not_empty.notify()
                     
                 # 深度グリッド可視化も生成（毎フレーム）
                 depth_grid = create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6)
                 
-                # 深度グリッド画像をキューに追加
+                # 深度グリッド画像をキューに追加（最適化版）
                 if depth_grid is not None and depth_grid.shape[0] > 0:
-                    if depth_grid_queue.full():
-                        depth_grid_queue.get_nowait()
-                    depth_grid_queue.put_nowait(depth_grid)
+                    with depth_grid_queue.mutex:
+                        if depth_grid_queue.full():
+                            depth_grid_queue.queue.clear()
+                        depth_grid_queue.queue.append(depth_grid)
+                        depth_grid_queue.not_empty.notify()
                 
             except Exception as e:
-                print(f"[WARN] Failed to visualize depth map: {e}")
+                logger.warning(f"Failed to visualize depth map: {e}")
 
             # 点群生成とトップビュー生成（5フレームごとに実行して負荷軽減）
             frame_count += 1
@@ -343,7 +355,7 @@ def depth_processing_thread():
                     
                     # 点群が生成できなかった場合はスキップ
                     if points is None or points.shape[0] == 0:
-                        print("[WARN] Empty point cloud. Skipping topview generation...")
+                        logger.warning("Empty point cloud. Skipping topview generation...")
                         continue
                     
                     # 占有グリッド生成
@@ -352,30 +364,32 @@ def depth_processing_thread():
                     # トップビュー画像生成
                     topview_image = visualize_occupancy_grid(occupancy_grid)
                     
-                    # 画像が正常に生成されたらキューに追加
+                    # 画像が正常に生成されたらキューに追加（最適化版）
                     if topview_image is not None and topview_image.shape[0] > 0:
-                        if topview_image_queue.full():
-                            topview_image_queue.get_nowait()
-                        topview_image_queue.put_nowait(topview_image)
+                        with topview_image_queue.mutex:
+                            if topview_image_queue.full():
+                                topview_image_queue.queue.clear()
+                            topview_image_queue.queue.append(topview_image)
+                            topview_image_queue.not_empty.notify()
                 except Exception as e:
-                    print(f"[ERROR] Error generating topview: {e}")
+                    logger.error(f"Error generating topview: {e}")
                     import traceback
                     traceback.print_exc()
             
             # ログ出力（20フレームごと）
             if frame_count % 20 == 0:
-                print(f"[INFO] Depth inference completed in {inference_time:.3f}s, shape: {depth_map.shape}")
+                logger.info(f"Depth inference completed in {inference_time:.3f}s, shape: {depth_map.shape}")
             
         except queue.Empty:
             # タイムアウト - 何もしない
             pass
         except Exception as e:
-            print(f"[ERROR] Error in depth processing thread: {e}")
+            logger.error(f"Error in depth processing thread: {e}")
             import traceback
             traceback.print_exc()  # スタックトレースを出力
             time.sleep(1.0)  # エラー発生時は少し長めに待機
     
-    print(f"[INFO] Depth processing thread stopped. Processed {frame_count} frames, skipped {skipped_frames} frames.")
+    logger.info(f"Depth processing thread stopped. Processed {frame_count} frames, skipped {skipped_frames} frames.")
 
 def get_depth_grid_stream():
     """深度グリッド画像ストリームを生成します"""

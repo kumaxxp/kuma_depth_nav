@@ -107,3 +107,25 @@ def initialize_depth_model(model_path=None):
         DepthProcessor インスタンス
     """
     return DepthProcessor(model_path)
+
+def convert_to_absolute_depth(depth_map, scaling_factor=15.0):
+    """
+    相対深度マップを絶対深度マップ（メートル単位）に変換します
+    
+    Args:
+        depth_map (numpy.ndarray): 相対深度マップ（0-1の範囲）
+        scaling_factor (float): スケーリング係数（キャリブレーションで決定）
+        
+    Returns:
+        numpy.ndarray: 絶対深度マップ（メートル単位）
+    """
+    # 深度マップがゼロに近い値を持つ場所を処理（ゼロ除算防止）
+    valid_mask = depth_map > 0.01
+    
+    # 絶対深度マップの初期化
+    absolute_depth = np.zeros_like(depth_map)
+    
+    # スケーリング係数を用いて相対深度から絶対深度を計算
+    absolute_depth[valid_mask] = scaling_factor / depth_map[valid_mask]
+    
+    return absolute_depth
