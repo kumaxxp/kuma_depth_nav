@@ -97,31 +97,41 @@ async def root():
                 background: #f0f0f0;
             }
             .container {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(640px, 1fr));
-                gap: 20px;
-                width: 100%;
+                max-width: 1280px;  /* 全体の幅を制限 */
+                margin: 0 auto;
             }
             .video-container {
-                margin-bottom: 20px;
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);  /* 2列のグリッド */
+                gap: 15px;
                 background: white;
                 border-radius: 10px;
                 padding: 15px;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             }
+            .video-item {
+                text-align: center;
+            }
             h2 {
                 color: #333;
                 margin-top: 0;
             }
+            h3 {
+                margin-top: 0;
+                margin-bottom: 10px;
+            }
             img {
-                width: 100%;
+                max-width: 100%;  /* 最大幅を100%に */
+                height: auto;     /* 高さを自動調整 */
                 border-radius: 5px;
+                display: inline-block;
             }
             .status {
                 margin-top: 10px;
                 padding: 10px;
                 background-color: #e6f7ff;
                 border-left: 4px solid #1890ff;
+                margin-bottom: 15px;
             }
             .warning {
                 background-color: #fff7e6;
@@ -132,12 +142,12 @@ async def root():
         </style>
     </head>
     <body>
-        <h1>Kuma Depth Navigation System</h1>
-        <div class="status" id="statusBar">
-            System Status: Running
-        </div>
-        
         <div class="container">
+            <h1>Kuma Depth Navigation System</h1>
+            <div class="status" id="statusBar">
+                System Status: Running
+            </div>
+            
             <div class="video-container">
                 <!-- カメラビュー -->
                 <div class="video-item">
