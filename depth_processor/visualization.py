@@ -167,23 +167,24 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             logger.warning("No valid depth values found")
             min_depth = 0.1
             max_depth = 0.9
+
         logger.debug(f"Using depth range for normalization: {min_depth:.4f} to {max_depth:.4f}")
 
         # 正規化して0-1範囲にする
-        normalized = np.zeros_like(depth_conv, dtype=np.float32)
-        valid_mask = depth_conv > 0.01
+        normalized = np.zeros_like(depth_feature, dtype=np.float32)
+        valid_mask = depth_feature > 0.01
         if np.any(valid_mask) and (max_depth > min_depth):
             normalized[valid_mask] = np.clip(
-                (depth_conv[valid_mask] - min_depth) / (max_depth - min_depth + 1e-6), 
+                (depth_feature[valid_mask] - min_depth) / (max_depth - min_depth + 1e-6), 
                 0, 1
             )
-                    
+            
         # colormap適用
         depth_colored = cv2.applyColorMap(
             (normalized * 255).astype(np.uint8), 
             cv2.COLORMAP_MAGMA
         )
-
+                    
         return depth_colored
         
     except Exception as e:
