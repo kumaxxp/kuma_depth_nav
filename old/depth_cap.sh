@@ -1,1 +1,0 @@
-python3 source/main.py --port 8889 --camera 0 --width 1280 --height 720
