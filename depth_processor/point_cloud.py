@@ -14,19 +14,20 @@ MAX_DEPTH = 6.0         # 最大深度（メートル）
 
 def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=None, cy=None):
     """
-    深度マップから3D点群を生成します。
+    深度マップから3D点群を生成する
     
     Args:
-        depth_map (numpy.ndarray): 深度マップ
-        fx, fy (float): カメラの焦点距離
-        cx, cy (float): 画像の中心座標。Noneの場合は画像の中心が使用されます。
-    
+        depth_map: 深度マップ（各ピクセルの深度値を含む2D配列）
+        fx, fy: カメラの焦点距離（ピクセル単位）
+        cx, cy: カメラの光学中心（指定しない場合は画像の中心）
+        
     Returns:
-        numpy.ndarray: 形状 (N, 3) の点群データ
+        points: N×3の点群配列（N=ピクセル数）
     """
-    # 深度マップの形状を取得
+    # 深度マップの形状確認と調整
     if len(depth_map.shape) > 2:
-        depth_map = depth_map.squeeze()  # バッチ次元や不要な次元を除去
+        # 3D以上の場合は最初の2次元のみ使用
+        depth_map = depth_map[:, :, 0]  # 最初のチャンネルのみを使用
     
     height, width = depth_map.shape
     
