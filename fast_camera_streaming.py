@@ -331,19 +331,29 @@ def get_topview_stream():
         
         # 最後に表示した有効な画像を保持
         last_valid_topview = default_topview.copy()
+        frame_count = 0
         
         while True:
             try:
-                # トップビュー画像があればそれを使用（キューから取り出さずに参照）
-                if not topview_image_queue.empty():
-                    current_topview = topview_image_queue.queue[0]  # キューから取り出さずに参照
-                    # 有効な画像なら最後の有効画像として保存
-                    if current_topview is not None and current_topview.shape[0] > 0:
-                        last_valid_topview = current_topview  # .copy()が不要な場合も多い
+                frame_count += 1
+                
+                # 5フレームごとにキューから取り出す（更新を強制）
+                if frame_count % 5 == 0 and not topview_image_queue.empty():
+                    current_topview = topview_image_queue.get_nowait()  # キューから取り出す
+                    logger.debug("Retrieved new topview from queue")
+                # 通常フレームでは参照のみ
+                elif not topview_image_queue.empty():
+                    current_topview = topview_image_queue.queue[0]  # 参照のみ
+                else:
+                    current_topview = None
+                
+                # 有効な画像なら最後の有効画像として保存
+                if current_topview is not None and current_topview.shape[0] > 0:
+                    last_valid_topview = current_topview.copy()  # コピーして保存
                 
                 # 前回の有効なトップビュー画像を使用
                 topview_image = last_valid_topview
-                    
+                     
                 # JPEGエンコード
                 ret, buffer = cv2.imencode('.jpg', topview_image)
                 if not ret:
@@ -352,14 +362,14 @@ def get_topview_stream():
                 
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                time.sleep(0.05)  # トップビュー更新は低いフレームレートでOK
+                time.sleep(0.1)  # 更新間隔を0.05から0.1に延長
                 
             except Exception as e:
-                print(f"[ERROR] Error in topview stream: {e}")
+                logger.error(f"Error in topview stream: {e}")  # printからloggerに変更
                 time.sleep(0.1)
     
     except Exception as e:
-        print(f"[ERROR] Fatal error in topview stream: {e}")
+        logger.error(f"Fatal error in topview stream: {e}")  # printからloggerに変更
 
 def depth_processing_thread():
     """深度推論を行うスレッド"""
@@ -478,16 +488,25 @@ def depth_processing_thread():
                     # トップビューを可視化
                     topview = visualize_occupancy_grid(occupancy_grid)
                     
-                    # キューに追加
-                    if not topview_image_queue.full():
+                    # キューに追加（古いデータがあれば削除）
+                    try:
+                        if topview_image_queue.full():
+                            # 古いデータを取り出して破棄
+                            old_topview = topview_image_queue.get_nowait()
+                            logger.debug("Removed old topview from queue")
+                        
                         topview_image_queue.put_nowait(topview)
-                        logger.debug("Topview visualization added to queue")
+                        logger.debug("Added new topview to queue")
+                    except Exception as e:
+                        logger.warning(f"Failed to update topview queue: {e}")
                 except Exception as e:
                     logger.error(f"Failed to process point cloud: {e}")
             
             # 定期的にログ出力
             if frame_count % 30 == 0:
                 logger.info(f"Processed {frame_count} depth frames, inference time: {inference_time:.3f}s")
+                # キューサイズの確認を追加
+                logger.info(f"Queue sizes: topview={topview_image_queue.qsize()}/{topview_image_queue.maxsize}, depth={depth_image_queue.qsize()}/{depth_image_queue.maxsize}")
                 
             # 100フレームごとにデバッグ画像を保存
             if frame_count % 100 == 0:
