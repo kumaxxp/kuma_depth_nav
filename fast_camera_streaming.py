@@ -16,7 +16,7 @@ from depth_processor import (
 )
 
 # ユーティリティのインポート
-from utils import load_config, setup_logger
+from utils import load_config, setup_logger, optimize_linux_performance
 
 # 設定の読み込み
 config = load_config()
@@ -31,6 +31,12 @@ logger = setup_logger(
     logging_config.get("level", "INFO"),
     logging_config.get("file")
 )
+
+# Linux最適化を実行
+try:
+    optimize_linux_performance()
+except NameError:
+    logger.warning("optimize_linux_performance 関数が見つかりません。Linux最適化はスキップします。")
 
 # グローバル変数
 frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
@@ -47,9 +53,6 @@ try:
 except ImportError:
     HAS_AXENGINE = False
     logger.warning("axengine is not installed. Running in basic mode without depth estimation.")
-
-# Linux環境の最適化
-optimize_linux_performance()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
