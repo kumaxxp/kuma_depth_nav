@@ -376,7 +376,7 @@ def depth_processing_thread():
     
     frame_count = 0
     process_count = 0
-    process_every_n_frames = 3  # 3フレームに1回だけ処理
+    process_every_n_frames = 1  # 3フレームに1回だけ処理
     last_log_time = time.time()
     
     # 前回の有効な深度マップと可視化結果を保存
