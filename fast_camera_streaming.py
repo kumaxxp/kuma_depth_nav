@@ -485,7 +485,7 @@ def depth_processing_thread():
                 depth_grid = create_depth_grid_visualization(
                     current_depth_map,
                     absolute_depth=absolute_depth,  # 絶対深度を渡す
-                    grid_size=(8, 8),  # 8x8のグリッド
+                    grid_size=(16, 12),  # 8x8のグリッド
                     max_distance=max(10.0, max_abs_depth * 1.2),  # 動的に最大距離を設定
                     cell_size=60        # セルサイズ60ピクセル
                 )
