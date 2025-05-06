@@ -574,11 +574,13 @@ def depth_processing_thread():
                     logger.debug(f"Point cloud shape: {point_cloud.shape}")  # <-- この行を追加
                     
                     # 占有グリッドに変換
-                    logger.debug("Creating occupancy grid")  # <-- この行を追加
+                    logger.debug("Creating occupancy grid")
                     occupancy_grid = create_top_down_occupancy_grid(
                         point_cloud,
                         grid_resolution=0.05,  # 5cm解像度
-                        z_threshold=0.5        # 高さ0.5m以上を障害物と判定
+                        grid_width=200,        # グリッド幅（セル数）
+                        grid_height=200,       # グリッド高さ（セル数）
+                        height_threshold=0.5   # z_threshold → height_thresholdに変更
                     )
                     logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")  # <-- この行を追加
                     
