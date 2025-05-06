@@ -120,56 +120,78 @@ def create_top_down_occupancy_grid(points, grid_resolution=GRID_RESOLUTION,
 
 def visualize_occupancy_grid(occupancy_grid):
     """
-    占有グリッドをカラー画像として可視化します。
-    
+    占有グリッドを視覚化する関数
     Args:
-        occupancy_grid (numpy.ndarray): 形状 (grid_height, grid_width) の占有グリッド
-            0: 不明（データなし）
-            1: 占有（障害物）
-            2: 通行可能
-    
+        occupancy_grid: 占有グリッド（0=空き、255=占有）
     Returns:
-        numpy.ndarray: BGR形式のカラー画像
+        可視化された画像
     """
-    # グリッドの形状
-    grid_height, grid_width = occupancy_grid.shape
+    # グリッドのサイズ
+    grid_h, grid_w = occupancy_grid.shape
     
-    # カラーマッピング
-    colors = {
-        0: [211, 211, 211],  # 不明: ライトグレー [BGR]
-        1: [0, 0, 255],      # 占有（障害物）: 赤
-        2: [0, 255, 0]       # 通行可能: 緑
-    }
+    # 表示用のキャンバスを作成（RGB）
+    visualization = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
     
-    # カラー画像の初期化
-    visualization = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
+    # 障害物（値が255のセル）は赤色で表示
+    visualization[occupancy_grid == 255] = [0, 0, 255]  # 赤色
     
-    # 各セルを色でマッピング
-    for value, color in colors.items():
-        mask = (occupancy_grid == value)
-        visualization[mask] = color
+    # 通行可能（値が0のセル）は緑色で表示
+    visualization[occupancy_grid == 0] = [0, 50, 0]  # 暗い緑色
     
-    # カメラ位置（グリッドの中央下部）を青い円で表示
-    camera_x = grid_width // 2
-    camera_y = grid_height - 10
-    cv2.circle(visualization, (camera_x, camera_y), 3, [255, 0, 0], -1)
+    # 未知領域（値が128のセル）はグレーで表示
+    visualization[occupancy_grid == 128] = [128, 128, 128]  # グレー
     
-    # 画像を拡大（640x480など）にリサイズ
-    visualization = cv2.resize(visualization, (640, 480), interpolation=cv2.INTER_NEAREST)
+    # 中央に車両位置を示す点を描画
+    center_x, center_y = grid_w // 2, grid_h - 20
+    cv2.circle(visualization, (center_x, center_y), 5, [255, 255, 255], -1)
     
-    # グリッドの罫線を描画（オプション）
-    grid_line_interval = int(480 / grid_height * 10)  # 10セルごとに罫線
-    for i in range(0, 480, grid_line_interval):
-        cv2.line(visualization, (0, i), (640, i), [80, 80, 80], 1)
-    for i in range(0, 640, grid_line_interval):
-        cv2.line(visualization, (i, 0), (i, 480), [80, 80, 80], 1)
+    # グリッド線を描画（10セルごと）
+    for i in range(0, grid_h, 10):
+        cv2.line(visualization, (0, i), (grid_w, i), [50, 50, 50], 1)
+    for j in range(0, grid_w, 10):
+        cv2.line(visualization, (j, 0), (j, grid_h), [50, 50, 50], 1)
     
-    # 現在位置と進行方向を示す矢印
+    # 前方向を示す矢印を描画
     cv2.arrowedLine(visualization, 
-                   (320, 400),  # 開始点
-                   (320, 300),  # 終了点
-                   [255, 0, 0],  # 色（青）
-                   2, # 太さ
-                   tipLength=0.2) # 矢印の先端の長さ
+                   (center_x, center_y),  # 始点
+                   (center_x, center_y - 50),  # 終点
+                   [255, 255, 255],  # 色
+                   2,  # 線の太さ
+                   tipLength=0.2)  # 矢印の先端の長さ
     
     return visualization
+
+# 末尾のテストコードを修正
+# 問題のコード: h, w = absolute_depth.shape[:2] が存在
+
+# 以下のように修正：
+if __name__ == "__main__":
+    # このブロックはモジュールが直接実行されたときのみ実行される
+    import numpy as np
+    
+    # テスト用のダミー深度マップ
+    test_depth = np.zeros((240, 320), dtype=np.float32)
+    
+    # 中央に円形の障害物を配置
+    for i in range(240):
+        for j in range(320):
+            dist = np.sqrt((i-120)**2 + (j-160)**2)
+            if dist < 50:
+                test_depth[i, j] = 0.5  # 近い障害物
+            else:
+                test_depth[i, j] = 1.0  # 遠い背景
+    
+    # 点群に変換
+    test_points = depth_to_point_cloud(test_depth, 500, 500)
+    
+    # 占有グリッドに変換
+    test_grid = create_top_down_occupancy_grid(test_points, 0.05, 200, 200, 0.5)
+    
+    # 可視化
+    test_vis = visualize_occupancy_grid(test_grid)
+    
+    # 画像を保存（必要に応じて）
+    # import cv2
+    # cv2.imwrite("test_topview.jpg", test_vis)
+    
+    print("Test completed successfully")

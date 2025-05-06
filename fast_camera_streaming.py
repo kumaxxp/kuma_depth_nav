@@ -405,7 +405,7 @@ def get_topview_stream():
                 
                 # 有効な画像なら最後の有効画像として保存
                 if current_topview is not None and current_topview.shape[0] > 0:
-                    last_valid_topview = current_topview.copy()  # コピーして保存
+                    last_valid_topview = current_topview.copy()
                 
                 # 前回の有効なトップビュー画像を使用
                 topview_image = last_valid_topview
@@ -484,6 +484,7 @@ def depth_processing_thread():
             
             # 深度マップを可視化
             try:
+                # 深度マップを可視化
                 current_colored_depth = create_depth_visualization(current_depth_map, frame.shape)
                 
                 # 可視化が有効かチェック
@@ -491,6 +492,29 @@ def depth_processing_thread():
                                          current_colored_depth.shape[0] > 0)
                 
                 if is_valid_visualization:
+                    # トップビュー変換対象領域を表示（中央の有効領域）
+                    h, w = current_colored_depth.shape[:2]
+                    
+                    # 有効なトップビュー変換領域（中央80%程度を使用）
+                    margin_percent = 0.1  # 画像の端から10%を除外
+                    x1 = int(w * margin_percent)
+                    y1 = int(h * margin_percent)
+                    x2 = int(w * (1.0 - margin_percent))
+                    y2 = int(h * (1.0 - margin_percent))
+                    
+                    # 関心領域を描画
+                    cv2.rectangle(current_colored_depth, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    
+                    # 前方方向を示す矢印を描画
+                    arrow_start = (w // 2, h - 20)
+                    arrow_end = (w // 2, h - 60)
+                    cv2.arrowedLine(current_colored_depth, arrow_start, arrow_end, 
+                                   (0, 255, 0), 2, tipLength=0.3)
+                    
+                    # 「トップビュー領域」というテキストを追加
+                    cv2.putText(current_colored_depth, "Top View Area", (x1 + 10, y1 + 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+                    
                     # 有効な可視化結果を保存
                     last_valid_colored_depth = current_colored_depth.copy()
                     
@@ -562,16 +586,29 @@ def depth_processing_thread():
             # 深度マップから絶対深度に変換した後に追加
             # トップビューの生成（10フレームに1回程度）
             if is_valid_depth and frame_count % 10 == 0:
-                logger.info("Starting topview generation")  # <-- この行を追加
+                logger.info("Starting topview generation")
                 try:
-                    # 点群に変換
-                    logger.debug(f"Converting depth to point cloud, depth shape: {absolute_depth.shape}")  # <-- この行を追加
+                    # 深度マップのサイズを取得
+                    h, w = absolute_depth.shape[:2]
+                    
+                    # 変換に使用する中央部分の範囲を計算
+                    margin_percent = 0.1  # 10%マージンを使用（深度表示と同じ）
+                    x1 = int(w * margin_percent)
+                    y1 = int(h * margin_percent)
+                    x2 = int(w * (1.0 - margin_percent))
+                    y2 = int(h * (1.0 - margin_percent))
+                    
+                    # 深度マップの中央部分を抽出
+                    center_depth = absolute_depth[y1:y2, x1:x2].copy()
+                    
+                    # 点群に変換（中央部分のみ）
+                    logger.debug(f"Converting center depth to point cloud, depth shape: {center_depth.shape}")
                     point_cloud = depth_to_point_cloud(
-                        absolute_depth,
+                        center_depth,  # 中央部分のみ使用
                         fx=depth_config.get("fx", 500),
                         fy=depth_config.get("fy", 500)
                     )
-                    logger.debug(f"Point cloud shape: {point_cloud.shape}")  # <-- この行を追加
+                    logger.debug(f"Point cloud shape: {point_cloud.shape}")
                     
                     # 占有グリッドに変換
                     logger.debug("Creating occupancy grid")
@@ -580,14 +617,29 @@ def depth_processing_thread():
                         grid_resolution=0.05,  # 5cm解像度
                         grid_width=200,        # グリッド幅（セル数）
                         grid_height=200,       # グリッド高さ（セル数）
-                        height_threshold=0.5   # z_threshold → height_thresholdに変更
+                        height_threshold=0.5   # 高さ閾値
                     )
-                    logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")  # <-- この行を追加
+                    logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")
                     
                     # 占有グリッドを可視化
-                    logger.debug("Visualizing occupancy grid")  # <-- この行を追加
+                    logger.debug("Visualizing occupancy grid")
                     topview_image = visualize_occupancy_grid(occupancy_grid)
-                    logger.debug(f"Topview image shape: {topview_image.shape}")  # <-- この行を追加
+                    
+                    # トップビューに追加情報を付与
+                    h_top, w_top = topview_image.shape[:2]
+                    # カメラ位置（下中央）
+                    cam_pos = (w_top // 2, h_top - 20)
+                    # カメラから前方への矢印を描画
+                    cv2.arrowedLine(topview_image, cam_pos, (w_top // 2, 20), 
+                                   (0, 255, 0), 2, tipLength=0.1)
+
+                    # 説明テキスト
+                    cv2.putText(topview_image, "Camera", (cam_pos[0] - 30, cam_pos[1] + 15), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    cv2.putText(topview_image, "Forward", (w_top // 2 - 30, 40), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    
+                    logger.debug(f"Topview image shape: {topview_image.shape}")
                     
                     # トップビューをキューに追加
                     try:
