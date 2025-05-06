@@ -116,14 +116,14 @@ def depth_to_color(depth_normalized):
     # HSVからBGRへの変換
     return cv2.cvtColor(np.uint8([[[hue, saturation, value]]]), cv2.COLOR_HSV2BGR)[0][0]
 
-def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8, 8), max_distance=10.0, cell_size=60):
+def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8, 6), max_distance=10.0, cell_size=60):
     """
-    深度マップをグリッド形式で可視化（深度マップと同じカラーマップを使用）
+    深度マップをグリッド形式で可視化（深度マップと完全に同じカラーマップを使用）
     
     Args:
         depth_map: 深度マップ（相対深度）
         absolute_depth: 絶対深度マップ（メートル単位）
-        grid_size: グリッドのサイズ（行数, 列数）
+        grid_size: グリッドのサイズ（行数, 列数）- デフォルト (8, 6) に変更
         max_distance: 最大深度（メートル）
         cell_size: セルの大きさ（ピクセル）
         
@@ -147,6 +147,29 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
     font_scale = 0.7
     font_thickness = 1
     
+    # 全体の有効な深度データからパーセンタイル値を計算（深度マップと同じ正規化のため）
+    all_valid_depths = []
+    
+    if absolute_depth is not None:
+        valid_mask = (absolute_depth >= 0.1) & (absolute_depth <= 30.0)
+        all_valid_depths = absolute_depth[valid_mask].flatten()
+    else:
+        valid_mask = depth_map > 0.01
+        if np.any(valid_mask):
+            temp_depths = 15.0 / depth_map[valid_mask]
+            valid_absolute_mask = (temp_depths >= 0.1) & (temp_depths <= 30.0)
+            all_valid_depths = temp_depths[valid_absolute_mask].flatten()
+    
+    # パーセンタイル計算（深度マップと同じ方法で）
+    if len(all_valid_depths) > 10:
+        min_depth = np.percentile(all_valid_depths, 5)  # 5パーセンタイル
+        max_depth = np.percentile(all_valid_depths, 95) # 95パーセンタイル
+        logger.debug(f"Depth grid normalization range: {min_depth:.2f}m - {max_depth:.2f}m")
+    else:
+        min_depth = 0.1
+        max_depth = max_distance
+        logger.warning("Not enough valid depth data for percentile calculation")
+    
     # 各セルの平均深度を計算して可視化
     for i in range(rows):
         for j in range(cols):
@@ -154,21 +177,15 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             r_start, r_end = row_indices[i], row_indices[i+1]
             c_start, c_end = col_indices[j], col_indices[j+1]
             
-            # セルの領域を拡張（境界線上の点を含める）
-            r_start_ext = max(0, r_start - 2)
-            r_end_ext = min(h, r_end + 2)
-            c_start_ext = max(0, c_start - 2)
-            c_end_ext = min(w, c_end + 2)
-            
             # セルの深度値を取得
             if absolute_depth is not None:
                 # 絶対深度から直接取得
-                cell_depth = absolute_depth[r_start_ext:r_end_ext, c_start_ext:c_end_ext]
+                cell_depth = absolute_depth[r_start:r_end, c_start:c_end]
                 # 無効な値をフィルタ（0.1m〜30mの範囲）
                 valid_depth = cell_depth[(cell_depth >= 0.1) & (cell_depth <= 30.0)]
             else:
                 # 相対深度から計算
-                cell_depth = depth_map[r_start_ext:r_end_ext, c_start_ext:c_end_ext]
+                cell_depth = depth_map[r_start:r_end, c_start:c_end]
                 # 無効な値をフィルタ
                 valid_depth = cell_depth[cell_depth > 0.01]
                 # 絶対深度に変換（簡易的なスケーリング）
@@ -183,22 +200,18 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             
             # 有効なデータがあるかどうか
             if valid_depth.size > 5:  # 最低5ピクセルは必要
-                # 外れ値を除外するため、25%トリミーン平均を使用
-                sorted_depths = np.sort(valid_depth.flatten())
-                trim_size = max(1, int(sorted_depths.size * 0.25))
-                if sorted_depths.size > trim_size*2:
-                    trimmed = sorted_depths[trim_size:-trim_size]
-                    avg_depth = np.mean(trimmed)
+                # 平均深度を計算
+                avg_depth = np.mean(valid_depth)
+                
+                # 深度マップと同じ正規化方法を使用
+                if max_depth > min_depth:
+                    norm_depth = np.clip((avg_depth - min_depth) / (max_depth - min_depth), 0, 1)
                 else:
-                    avg_depth = np.mean(sorted_depths)
+                    norm_depth = 0.5  # フォールバック
                 
-                # 深度に応じた色を設定（深度マップと同じMAGMAカラーマップを使用）
-                norm_depth = min(avg_depth / max_distance, 1.0)
-                
-                # MAGMA カラーマップを適用（深度マップと同じ）
-                # 0-255の範囲に変換して、MAGMAカラーマップを適用
-                depth_as_uint8 = np.array([(1.0 - norm_depth) * 255], dtype=np.uint8)
-                color_pixel = cv2.applyColorMap(depth_as_uint8, cv2.COLORMAP_MAGMA)[0][0]
+                # MAGMAカラーマップを深度マップと全く同じ方法で適用
+                depth_as_uint8 = np.uint8(norm_depth * 255)
+                color_pixel = cv2.applyColorMap(np.array([[depth_as_uint8]]), cv2.COLORMAP_MAGMA)[0, 0]
                 color = (int(color_pixel[0]), int(color_pixel[1]), int(color_pixel[2]))
                 
                 # セルを描画
@@ -272,20 +285,20 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
         x = j * cell_size
         cv2.line(output, (x, 0), (x, output_h), (50, 50, 50), 1)
     
-    # カラーバーを追加（オプション）
+    # カラーバーを追加
     colorbar_height = 20
     colorbar_width = output_w
     colorbar = np.zeros((colorbar_height, colorbar_width, 3), dtype=np.uint8)
     
     for x in range(colorbar_width):
         normalized_value = x / colorbar_width
-        color_value = np.array([int((1 - normalized_value) * 255)], dtype=np.uint8)
-        color_pixel = cv2.applyColorMap(color_value, cv2.COLORMAP_MAGMA)[0][0]
+        color_value = np.array([[[np.uint8(normalized_value * 255)]]], dtype=np.uint8)
+        color_pixel = cv2.applyColorMap(color_value, cv2.COLORMAP_MAGMA)[0, 0, 0]
         colorbar[:, x] = color_pixel
     
     # カラーバーラベルを追加
-    cv2.putText(colorbar, "近い", (10, 15), font, 0.5, (255, 255, 255), 1)
-    cv2.putText(colorbar, f"{max_distance}m", (colorbar_width - 50, 15), font, 0.5, (255, 255, 255), 1)
+    cv2.putText(colorbar, f"{min_depth:.1f}m", (10, 15), font, 0.5, (255, 255, 255), 1)
+    cv2.putText(colorbar, f"{max_depth:.1f}m", (colorbar_width - 70, 15), font, 0.5, (255, 255, 255), 1)
     
     # カラーバーを出力画像に結合
     output_with_colorbar = np.vstack([output, colorbar])
