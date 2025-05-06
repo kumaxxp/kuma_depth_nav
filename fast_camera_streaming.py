@@ -472,55 +472,28 @@ def depth_processing_thread():
                 scaling_factor=depth_config.get("scaling_factor", 15.0)
             )
 
-            # 10フレームに1回のみ点群処理を実行
-            if frame_count % 10 == 0:
-                try:
-                    # 深度から点群を生成
-                    points = depth_to_point_cloud(
-                        absolute_depth,
-                        fx=depth_config.get("fx", 500),
-                        fy=depth_config.get("fy", 500)
-                    )
-                    
-                    # 占有グリッドを生成
-                    try:
-                        logger.debug(f"Generating occupancy grid from {len(points)} points")
-                        occupancy_grid = create_top_down_occupancy_grid(points)
-                        logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")
-                        
-                        # トップビューを可視化
-                        topview = visualize_occupancy_grid(occupancy_grid)
-                        logger.debug(f"Topview shape: {topview.shape}")
-                    except Exception as e:
-                        logger.error(f"Error in occupancy grid generation: {e}")
-                        import traceback
-                        logger.error(traceback.format_exc())
-                    
-                    # キューに追加（古いデータがあれば削除）
-                    try:
-                        if topview_image_queue.full():
-                            # 古いデータを取り出して破棄
-                            old_topview = topview_image_queue.get_nowait()
-                            logger.debug("Removed old topview from queue")
-                        
-                        topview_image_queue.put_nowait(topview)
-                        logger.debug("Added new topview to queue")
-                    except Exception as e:
-                        logger.warning(f"Failed to update topview queue: {e}")
-                except Exception as e:
-                    logger.error(f"Failed to process point cloud: {e}")
-            
             # 深度グリッドの生成を追加
-            depth_grid = create_depth_grid_visualization(
-                current_depth_map,
-                grid_size=(10, 10),  # 10x10のグリッド
-                max_distance=10.0     # 最大10メートル
-            )
-            
-            # 深度グリッドをキューに追加
-            if not depth_grid_image_queue.full():
-                depth_grid_image_queue.put_nowait(depth_grid)
-                logger.debug("Depth grid visualization added to queue")
+            try:
+                depth_grid = create_depth_grid_visualization(
+                    current_depth_map,
+                    absolute_depth=absolute_depth,  # 絶対深度を渡す
+                    grid_size=(8, 8),  # 8x8のグリッド
+                    max_distance=10.0,  # 最大10メートル
+                    cell_size=60        # セルサイズ60ピクセル
+                )
+                
+                # 深度グリッドをキューに追加
+                try:
+                    if depth_grid_image_queue.full():
+                        depth_grid_image_queue.get_nowait()  # 古いデータを削除
+                    depth_grid_image_queue.put_nowait(depth_grid)
+                    logger.debug("Depth grid visualization added to queue")
+                except Exception as e:
+                    logger.warning(f"Failed to update depth grid queue: {e}")
+            except Exception as e:
+                logger.error(f"Failed to create depth grid: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
             
             # 定期的にログ出力
             if frame_count % 30 == 0:
@@ -550,28 +523,35 @@ def get_depth_grid_stream():
     """深度グリッド画像ストリームを生成します"""
     try:
         # デフォルトの深度グリッド画像（空のグリッド）を準備
-        default_grid_image = np.zeros((480, 640, 3), dtype=np.uint8) + 30
+        default_grid_image = np.zeros((480, 480, 3), dtype=np.uint8) + 30
         
         # グリッド線を描画
-        for row in range(1, 6):
-            y = row * 80
-            cv2.line(default_grid_image, (0, y), (640, y), (100, 100, 100), 1)
-        
-        for col in range(1, 8):
-            x = col * 80
-            cv2.line(default_grid_image, (x, 0), (x, 480), (100, 100, 100), 1)
+        for i in range(9):  # 8x8グリッドなので9本の線
+            pos = i * 60  # 60ピクセルごと
+            cv2.line(default_grid_image, (0, pos), (480, pos), (100, 100, 100), 1)
+            cv2.line(default_grid_image, (pos, 0), (pos, 480), (100, 100, 100), 1)
         
         # 最後に表示した有効な画像を保持
         last_valid_grid_image = default_grid_image.copy()
+        frame_count = 0
         
         while True:
             try:
-                # 修正: depth_grid_queue → depth_grid_image_queue
-                if not depth_grid_image_queue.empty():
-                    current_grid_image = depth_grid_image_queue.queue[0]  # キューから取り出さずに参照
-                    # 有効な画像なら最後の有効画像として保存
-                    if current_grid_image is not None and current_grid_image.shape[0] > 0:
-                        last_valid_grid_image = current_grid_image.copy()
+                frame_count += 1
+                
+                # 5フレームごとにキューから取り出す（更新を強制）
+                if frame_count % 5 == 0 and not depth_grid_image_queue.empty():
+                    current_grid_image = depth_grid_image_queue.get_nowait()  # キューから取り出す
+                    logger.debug("Retrieved new depth grid from queue")
+                # 通常フレームでは参照のみ
+                elif not depth_grid_image_queue.empty():
+                    current_grid_image = depth_grid_image_queue.queue[0]  # 参照のみ
+                else:
+                    current_grid_image = None
+                
+                # 有効な画像なら最後の有効画像として保存
+                if current_grid_image is not None and current_grid_image.shape[0] > 0:
+                    last_valid_grid_image = current_grid_image.copy()
                 
                 # 前回の有効な深度グリッド画像を使用
                 grid_image = last_valid_grid_image
@@ -579,19 +559,19 @@ def get_depth_grid_stream():
                 # JPEGエンコード
                 ret, buffer = cv2.imencode('.jpg', grid_image)
                 if not ret:
-                    logger.warning("JPEG encode failed for grid image.")  # printもloggerに変更
+                    logger.warning("JPEG encode failed for grid image.")
                     continue
                 
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                time.sleep(0.05)  # 更新は低いフレームレートでOK
+                time.sleep(0.1)  # 更新間隔を0.05から0.1に延長
                 
             except Exception as e:
-                logger.error(f"Error in depth grid stream: {e}")  # printもloggerに変更
+                logger.error(f"Error in depth grid stream: {e}")
                 time.sleep(0.1)
     
     except Exception as e:
-        logger.error(f"Fatal error in depth grid stream: {e}")  # printもloggerに変更
+        logger.error(f"Fatal error in depth grid stream: {e}")
 
 @app.get("/video")
 async def video_endpoint():
