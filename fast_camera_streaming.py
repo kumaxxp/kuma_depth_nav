@@ -369,8 +369,21 @@ def get_topview_stream():
     """トップビュー画像ストリームを生成します"""
     try:
         # デフォルトのトップビュー画像（空の占有グリッド）を準備
-        default_grid = np.zeros((100, 100), dtype=np.uint8)  # 空の占有グリッド
+        default_grid = np.zeros((200, 200), dtype=np.uint8)  # 空の占有グリッド
+        
+        # テスト用のパターンを作成（中央に円と十字線）
+        cv2.circle(default_grid, (100, 100), 30, 255, -1)  # 中央に円
+        cv2.line(default_grid, (0, 100), (200, 100), 128, 2)  # 水平線
+        cv2.line(default_grid, (100, 0), (100, 200), 128, 2)  # 垂直線
+        
+        # 占有グリッドを可視化
         default_topview = visualize_occupancy_grid(default_grid)
+        
+        # テスト用のテキストを追加
+        cv2.putText(default_topview, "Test Pattern", (20, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        logger.info(f"Created test topview with shape: {default_topview.shape}")
         
         # 最後に表示した有効な画像を保持
         last_valid_topview = default_topview.copy()
@@ -549,24 +562,31 @@ def depth_processing_thread():
             # 深度マップから絶対深度に変換した後に追加
             # トップビューの生成（10フレームに1回程度）
             if is_valid_depth and frame_count % 10 == 0:
+                logger.info("Starting topview generation")  # <-- この行を追加
                 try:
                     # 点群に変換
+                    logger.debug(f"Converting depth to point cloud, depth shape: {absolute_depth.shape}")  # <-- この行を追加
                     point_cloud = depth_to_point_cloud(
                         absolute_depth,
                         fx=depth_config.get("fx", 500),
                         fy=depth_config.get("fy", 500)
                     )
+                    logger.debug(f"Point cloud shape: {point_cloud.shape}")  # <-- この行を追加
                     
                     # 占有グリッドに変換
+                    logger.debug("Creating occupancy grid")  # <-- この行を追加
                     occupancy_grid = create_top_down_occupancy_grid(
                         point_cloud,
                         grid_resolution=0.05,  # 5cm解像度
                         grid_size=(200, 200),  # 10m x 10m (200 x 0.05m)
                         z_threshold=0.5        # 高さ0.5m以上を障害物と判定
                     )
+                    logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")  # <-- この行を追加
                     
                     # 占有グリッドを可視化
+                    logger.debug("Visualizing occupancy grid")  # <-- この行を追加
                     topview_image = visualize_occupancy_grid(occupancy_grid)
+                    logger.debug(f"Topview image shape: {topview_image.shape}")  # <-- この行を追加
                     
                     # トップビューをキューに追加
                     try:
@@ -696,6 +716,44 @@ async def depth_metrics():
         return metrics
     else:
         return {"error": "No depth data available"}
+
+@app.get("/test_topview")
+async def test_topview_endpoint():
+    """トップビュー生成のテスト用エンドポイント"""
+    try:
+        # テスト用のトップビュー画像を作成
+        test_grid = np.zeros((200, 200), dtype=np.uint8)
+        
+        # 中央に障害物を配置
+        for i in range(200):
+            for j in range(200):
+                dist = np.sqrt((i-100)**2 + (j-100)**2)
+                if dist < 50:  # 中央に円形の障害物
+                    test_grid[i, j] = 255
+                elif (i > 90 and i < 110) or (j > 90 and j < 110):  # 十字線
+                    test_grid[i, j] = 128
+        
+        # トップビューを可視化
+        test_image = visualize_occupancy_grid(test_grid)
+        
+        # テキスト追加
+        cv2.putText(test_image, "Test Pattern", (20, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # キューに追加
+        if topview_image_queue.full():
+            topview_image_queue.get_nowait()
+        topview_image_queue.put_nowait(test_image)
+        
+        # JPEGにエンコード
+        ret, buffer = cv2.imencode('.jpg', test_image)
+        
+        # StreamingResponseで直接返す
+        return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpeg")
+    except Exception as e:
+        logger.error(f"Test topview error: {e}")
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 if __name__ == "__main__":
     import platform
