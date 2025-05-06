@@ -84,23 +84,99 @@ async def root():
     """HTMLページを提供します"""
     # 共通のHTMLテンプレート
     html_content = """
+    <!DOCTYPE html>
     <html>
-        <head>
-            <title>Depth Camera Stream</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                .container { display: flex; flex-wrap: wrap; justify-content: center; }
-                .video-container { margin: 10px; text-align: center; }
-                h1 { text-align: center; color: #333; }
-                h3 { color: #555; }
-                .stats { margin-top: 20px; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }
-                .refresh-btn { padding: 5px 10px; margin-top: 10px; cursor: pointer; }
-                .warning { color: red; text-align: center; padding: 10px; }
-                .row { display: flex; justify-content: center; flex-wrap: wrap; }
-            </style>
-        </head>
-        <body>
-            <h1>Depth Anything カメラストリーム</h1>
+    <head>
+        <title>Kuma Depth Navigation</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: #f0f0f0;
+            }
+            .container {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(640px, 1fr));
+                gap: 20px;
+                width: 100%;
+            }
+            .video-container {
+                margin-bottom: 20px;
+                background: white;
+                border-radius: 10px;
+                padding: 15px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            }
+            h2 {
+                color: #333;
+                margin-top: 0;
+            }
+            img {
+                width: 100%;
+                border-radius: 5px;
+            }
+            .status {
+                margin-top: 10px;
+                padding: 10px;
+                background-color: #e6f7ff;
+                border-left: 4px solid #1890ff;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Kuma Depth Navigation System</h1>
+        <div class="status" id="statusBar">
+            System Status: Running
+        </div>
+        
+        <div class="container">
+            <div class="video-container">
+                <h2>Camera Feed</h2>
+                <img src="/video" alt="Camera Feed">
+            </div>
+            
+            <div class="video-container">
+                <h2>Depth Map</h2>
+                <img src="/depth_video" alt="Depth Map">
+            </div>
+            
+            <div class="video-container">
+                <h2>Depth Grid</h2>
+                <img src="/depth_grid" alt="Depth Grid">
+            </div>
+            
+            <div class="video-container">
+                <h2>Top View</h2>
+                <img src="/topview" alt="Top View">
+            </div>
+        </div>
+        
+        <script>
+            // 画像の読み込み状態をモニタリング
+            const images = document.querySelectorAll('img');
+            const statusBar = document.getElementById('statusBar');
+            
+            // 画像の読み込みエラーを監視
+            images.forEach(img => {
+                img.onerror = function() {
+                    this.src = '/static/error.jpg';  // エラー時の画像
+                    this.style.border = '2px solid red';
+                    statusBar.innerHTML = 'System Status: Error loading some components';
+                    statusBar.style.backgroundColor = '#fff1f0';
+                    statusBar.style.borderLeft = '4px solid #f5222d';
+                };
+                
+                // 定期的に画像をリロード
+                setInterval(() => {
+                    const currentSrc = img.src;
+                    if (!img.currentSrc || img.currentSrc.includes('error.jpg')) return;
+                    img.src = currentSrc.split('?')[0] + '?' + new Date().getTime();
+                }, 5000);  // 5秒ごとにリロード
+            });
+        </script>
+    </body>
+    </html>
     """
     
     # axengineがあるかどうかで表示内容を変える
@@ -237,7 +313,7 @@ def get_topview_stream():
                     current_topview = topview_image_queue.queue[0]  # キューから取り出さずに参照
                     # 有効な画像なら最後の有効画像として保存
                     if current_topview is not None and current_topview.shape[0] > 0:
-                        last_valid_topview = current_topview.copy()
+                        last_valid_topview = current_topview  # .copy()が不要な場合も多い
                 
                 # 前回の有効なトップビュー画像を使用
                 topview_image = last_valid_topview
@@ -245,7 +321,7 @@ def get_topview_stream():
                 # JPEGエンコード
                 ret, buffer = cv2.imencode('.jpg', topview_image)
                 if not ret:
-                    print("[WARN] JPEG encode failed for topview image.")
+                    logger.warning("JPEG encode failed for topview image.")
                     continue
                 
                 yield (b'--frame\r\n'
@@ -268,17 +344,14 @@ def depth_processing_thread():
     depth_processor = DepthProcessor()
     
     if not depth_processor.is_available():
-        logger.error("Failed to initialize depth model. Thread stopping.")
-        return
+        logger.warning("Using dummy depth data (model initialization failed)")
+    else:
+        logger.info("Depth model initialized successfully")
     
     frame_count = 0
-    skipped_frames = 0
     
-    # 設定から絶対深度変換のスケーリング係数を取得
-    scaling_factor = config["depth"].get("scaling_factor", 15.0)
-    
-    # 深度処理スレッド内で定期的に画像を保存
-    debug_save_interval = 100  # 100フレームごとに保存
+    # デバッグ用: 最初のフレームの可視化テスト
+    debug_first_frame = True
     
     while is_running:
         try:
@@ -292,129 +365,101 @@ def depth_processing_thread():
             if depth_map is None or depth_map.size == 0:
                 logger.warning("Empty depth map received. Skipping...")
                 continue
-            else:
-                # 深度マップの統計情報をログに出力
-                if frame_count % 10 == 0:  # 10フレームごとに出力
-                    valid_depths = depth_map[depth_map > 0.01]
-                    if len(valid_depths) > 0:
-                        min_val = valid_depths.min()
-                        max_val = valid_depths.max()
-                        mean_val = valid_depths.mean()
-                        logger.info(f"Depth stats - Min: {min_val:.4f}, Max: {max_val:.4f}, Mean: {mean_val:.4f}")
-                    else:
-                        logger.warning("No valid depth values found!")
-
-            # 深度マップを可視化する前
-            logger.info(f"Visualizing depth map with shape: {depth_map.shape}")
-
-            # テストモードフラグ
-            test_mode = False
-            if test_mode:
-                # テスト用のダミー深度マップを生成
-                h, w = frame.shape[:2]
-                dummy_depth = np.zeros((1, 256, 384, 1), dtype=np.float32)
-                for y in range(256):
-                    # 上から下に向かって0.1→0.9のグラデーション
-                    value = 0.1 + 0.8 * (y / 255)
-                    dummy_depth[0, y, :, 0] = value
-                logger.info("Generated dummy depth map for testing")
-                depth_map = dummy_depth
-            
-            # 深度マップを可視化
-            logger.info(f"Depth map before visualization - shape: {depth_map.shape}, type: {type(depth_map)}")
-            logger.info(f"Depth map range: min={np.min(depth_map)}, max={np.max(depth_map)}")
-
-            # オプション: 相対深度から絶対深度への変換
-            # absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor)
                 
-            # 深度データをキューに追加（最適化版）
-            try:
-                with depth_data_queue.mutex:  # キューのロックを取得
-                    if depth_data_queue.full():
-                        depth_data_queue.queue.clear()  # キューを空にする（コピーなし）
-                    depth_data_queue.queue.append(depth_map)  # 新しいデータを追加
-                    depth_data_queue.not_empty.notify()  # 待機中のスレッドに通知
-            except Exception as e:
-                logger.warning(f"Failed to update depth data queue: {e}")
+            # 最初のフレームをファイルに保存（デバッグ用）
+            if debug_first_frame:
+                try:
+                    # 深度マップ統計
+                    min_val = np.min(depth_map)
+                    max_val = np.max(depth_map)
+                    mean_val = np.mean(depth_map)
+                    logger.info(f"First depth map - Min: {min_val:.4f}, Max: {max_val:.4f}, Mean: {mean_val:.4f}")
+                    
+                    # 可視化して保存
+                    first_vis = create_depth_visualization(depth_map, frame.shape)
+                    cv2.imwrite("first_depth_frame.jpg", first_vis)
+                    logger.info("First depth frame visualization saved to: first_depth_frame.jpg")
+                    
+                    # 形状情報
+                    logger.info(f"Frame shape: {frame.shape}")
+                    logger.info(f"Depth map shape: {depth_map.shape}")
+                    
+                    debug_first_frame = False
+                except Exception as e:
+                    logger.error(f"Error saving debug frame: {e}")
             
             # 深度マップを可視化
+            logger.debug(f"Creating depth visualization for frame {frame_count}")
             try:
-                # 元の単純な方法で深度マップを可視化
                 colored_depth = create_depth_visualization(depth_map, frame.shape)
                 
                 # 可視化に成功したら深度画像をキューに追加
-                if colored_depth is not None:
+                if colored_depth is not None and colored_depth.shape[0] > 0:
                     try:
                         if depth_image_queue.full():
-                            depth_image_queue.get_nowait()  # 古い深度データを削除
+                            depth_image_queue.get_nowait()  # 古いデータを削除
                         depth_image_queue.put_nowait(colored_depth)
+                        logger.debug(f"Depth visualization added to queue, shape: {colored_depth.shape}")
                     except Exception as e:
                         logger.warning(f"Failed to update depth image queue: {e}")
+                else:
+                    logger.warning("Empty visualization result")
             except Exception as e:
-                logger.warning(f"Failed to visualize depth map: {e}")
+                logger.error(f"Failed to visualize depth map: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+            # 深度マップから絶対深度に変換
+            absolute_depth = convert_to_absolute_depth(
+                depth_map, 
+                scaling_factor=depth_config.get("scaling_factor", 15.0)
+            )
 
-            # 点群生成とトップビュー生成（5フレームごとに実行して負荷軽減）
-            frame_count += 1
-            if frame_count % 5 == 0:
+            # 10フレームに1回のみ点群処理を実行
+            if frame_count % 10 == 0:
                 try:
-                    # 深度マップから点群生成
-                    fx = config["depth"].get("fx", 500)  
-                    fy = config["depth"].get("fy", 500)
-                    cx = config["depth"].get("cx", depth_map.shape[2] / 2)  
-                    cy = config["depth"].get("cy", depth_map.shape[1] / 2)
-                    points = depth_to_point_cloud(depth_map, fx, fy, cx, cy)
+                    # 深度から点群を生成
+                    points = depth_to_point_cloud(
+                        absolute_depth,
+                        fx=depth_config.get("fx", 500),
+                        fy=depth_config.get("fy", 500)
+                    )
                     
-                    # 点群が生成できなかった場合はスキップ
-                    if points is None or points.shape[0] == 0:
-                        logger.warning("Empty point cloud. Skipping topview generation...")
-                        continue
-                    
-                    # 占有グリッド生成
+                    # 占有グリッドを生成
                     occupancy_grid = create_top_down_occupancy_grid(points)
                     
-                    # トップビュー画像生成
-                    topview_image = visualize_occupancy_grid(occupancy_grid)
+                    # トップビューを可視化
+                    topview = visualize_occupancy_grid(occupancy_grid)
                     
-                    # 画像が正常に生成されたらキューに追加（最適化版）
-                    if topview_image is not None and topview_image.shape[0] > 0:
-                        with topview_image_queue.mutex:
-                            if topview_image_queue.full():
-                                topview_image_queue.queue.clear()
-                            topview_image_queue.queue.append(topview_image)
-                            topview_image_queue.not_empty.notify()
+                    # キューに追加
+                    if not topview_image_queue.full():
+                        topview_image_queue.put_nowait(topview)
+                        logger.debug("Topview visualization added to queue")
                 except Exception as e:
-                    logger.error(f"Error generating topview: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Failed to process point cloud: {e}")
             
-            # ログ出力（20フレームごと）
-            if frame_count % 20 == 0:
-                logger.info(f"Depth inference completed in {inference_time:.3f}s, shape: {depth_map.shape}")
-            
-            # 深度処理スレッド内で定期的に画像を保存
-            if frame_count % debug_save_interval == 0:
+            # 定期的にログ出力
+            frame_count += 1
+            if frame_count % 30 == 0:
+                logger.info(f"Processed {frame_count} depth frames, inference time: {inference_time:.3f}s")
+                
+            # 100フレームごとにデバッグ画像を保存
+            if frame_count % 100 == 0:
                 try:
-                    # 元のフレームを保存
-                    cv2.imwrite(f"debug_frame_{frame_count}.jpg", frame)
-                    
-                    # 深度マップを可視化して保存
-                    colored_depth = create_depth_visualization(depth_map, frame.shape)
-                    if colored_depth is not None:
-                        cv2.imwrite(f"debug_depth_{frame_count}.jpg", colored_depth)
-                        logger.info(f"Debug images saved for frame {frame_count}")
-                except Exception as e:
-                    logger.error(f"Failed to save debug images: {e}")
-            
+                    debug_vis = create_depth_visualization(depth_map, frame.shape)
+                    cv2.imwrite(f"depth_frame_{frame_count}.jpg", debug_vis)
+                except Exception:
+                    pass
+                
         except queue.Empty:
-            # タイムアウト - 何もしない
-            pass
+            continue
         except Exception as e:
             logger.error(f"Error in depth processing thread: {e}")
             import traceback
-            traceback.print_exc()  # スタックトレースを出力
-            time.sleep(1.0)  # エラー発生時は少し長めに待機
+            logger.error(traceback.format_exc())
+            time.sleep(1.0)  # エラー時は少し長めに待機
     
-    logger.info(f"Depth processing thread stopped. Processed {frame_count} frames, skipped {skipped_frames} frames.")
+    logger.info(f"Depth processing thread stopped. Processed {frame_count} frames.")
 
 def get_depth_grid_stream():
     """深度グリッド画像ストリームを生成します"""
@@ -502,6 +547,14 @@ async def depth_metrics():
         return {"error": "No depth data available"}
 
 if __name__ == "__main__":
+    import platform
+    logger.info(f"システム: {platform.system()} {platform.release()}")
+    logger.info(f"Python: {platform.python_version()}")
+    logger.info(f"OpenCV: {cv2.__version__}")
+    logger.info(f"設定: カメラ={camera_config.get('device_index', 0)}, ポート={server_config.get('port', 8888)}")
+    logger.info(f"axengine利用可能: {HAS_AXENGINE}")
+    
+    # サーバー起動
     import uvicorn
     host = server_config.get("host", "0.0.0.0")
     port = server_config.get("port", 8888)

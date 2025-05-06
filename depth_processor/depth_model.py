@@ -51,42 +51,30 @@ class DepthProcessor:
             if not os.path.exists(self.model_path):
                 logger.error(f"Model file not found: {self.model_path}")
                 return None
-                
-            # セッション作成
-            session = axe.InferenceSession(self.model_path)
-
-            # モデル情報の出力を安全に行う
+                 
+            # セッション作成 - エラー処理を強化
             try:
-                inputs = session.get_inputs()
-                logger.info(f"Model inputs: {[x.name for x in inputs]}")
-                if inputs:
-                    logger.info(f"Input name: {inputs[0].name}")
-                    # shape と type へのアクセスで例外が発生する可能性があるためtry-except内に移動
-                    try:
-                        if hasattr(inputs[0], 'shape'):
-                            logger.info(f"Input shape: {inputs[0].shape}")
-                        if hasattr(inputs[0], 'type'):
-                            logger.info(f"Input type: {inputs[0].type}")
-                    except Exception as e:
-                        logger.warning(f"Could not get input details: {e}")
+                session = axe.InferenceSession(self.model_path)
+                logger.info("Model session created successfully")
                 
-                outputs = session.get_outputs()
-                logger.info(f"Model outputs: {[x.name for x in outputs]}")
-                if outputs:
-                    logger.info(f"Output name: {outputs[0].name}")
-                    try:
-                        if hasattr(outputs[0], 'shape'):
-                            logger.info(f"Output shape: {outputs[0].shape}")
-                        if hasattr(outputs[0], 'type'):
-                            logger.info(f"Output type: {outputs[0].type}")
-                    except Exception as e:
-                        logger.warning(f"Could not get output details: {e}")
+                # モデル入力情報の取得は成功した場合のみ
+                try:
+                    inputs = session.get_inputs()
+                    if inputs and len(inputs) > 0:
+                        logger.info(f"Model has {len(inputs)} inputs")
+                        logger.info(f"First input name: {inputs[0].name}")
+                except Exception as e:
+                    logger.warning(f"Could not get input details: {e}, but continuing")
+                    
+                # エラーがあっても、セッションは返す（推論は可能な場合があるため）
+                logger.info("Model loaded successfully")
+                return session
             except Exception as e:
-                logger.warning(f"Error getting model details: {e}")
-                # ここでは例外を握りつぶす（モデルのメタデータを取得できなくても実行は続行）
-
-            logger.info("Model loaded successfully")
-            return session
+                logger.error(f"Failed to create inference session: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return None
+            
         except Exception as e:
             logger.error(f"Failed to initialize depth model: {e}")
             import traceback
@@ -114,69 +102,85 @@ class DepthProcessor:
     def predict(self, frame):
         """深度推定を実行"""
         if not self.is_available():
-            # テスト用のダミー深度マップを生成
-            if frame is not None:
-                h, w = frame.shape[:2]
-                # 距離に応じた深度を生成（上部ほど遠く、下部ほど近く）
-                dummy_depth = np.zeros((1, 256, 384, 1), dtype=np.float32)
-                for y in range(256):
-                    # 下部ほど近く（値が大きい）
-                    value = 0.1 + 0.9 * (y / 256)
-                    dummy_depth[0, y, :, 0] = value
-                logger.info("Generated dummy depth map for testing")
-                return dummy_depth, 0.01
-            return None, 0.0
+            # ダミーデータを使用
+            logger.info("Using dummy depth data (model not available)")
+            return self._generate_dummy_depth(frame), 0.01
             
         start_time = time.time()
         
         try:
             # フレーム前処理
             input_tensor = self.process_frame(frame)
-            logger.info(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
-            logger.info(f"Input tensor range: min={np.min(input_tensor)}, max={np.max(input_tensor)}")
+            
+            # 入力テンソルの形状ログ出力
+            logger.debug(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
             
             # 推論実行
-            logger.info(f"Starting inference with input name: {self.input_name}")
-            depth = self.model.run(None, {self.input_name: input_tensor})[0]
-            logger.info(f"Inference completed successfully")
+            outputs = self.model.run(None, {self.input_name: input_tensor})
+            if outputs is None or len(outputs) == 0:
+                logger.error("Inference returned empty outputs")
+                return self._generate_dummy_depth(frame), time.time() - start_time
+                
+            depth = outputs[0]
+            logger.debug(f"Raw depth output shape: {depth.shape}, size: {depth.size}")
             
-            # 後処理 - reshape操作を修正
-            # オリジナルのモデル出力形状を確認
-            logger.info(f"Raw depth output shape: {depth.shape}, size: {depth.size}")
-            logger.info(f"Depth output range: min={np.min(depth)}, max={np.max(depth)}")
-            
-            # 適切な形状に変換
-            # 一般的な単眼深度推定モデルは(H,W)または(1,H,W)の形状で出力する
-            if len(depth.shape) == 2:
-                # すでに2次元の場合
-                depth_map = depth.reshape(1, depth.shape[0], depth.shape[1], 1)
-            elif len(depth.shape) == 3 and depth.shape[0] == 1:
-                # バッチ次元がある3次元の場合
-                depth_map = depth.reshape(1, depth.shape[1], depth.shape[2], 1)
-            else:
-                # それ以外の場合は推論された深度マップの形状を元にreshape
-                h = int(np.sqrt(depth.size / 256))
-                w = int(np.sqrt(depth.size / 384))
-                if h * w * 384 == depth.size:
-                    depth_map = depth.reshape(1, h, w, 1)
-                else:
-                    # 384×256に強制変換
+            # 後処理 - 形状の明示的指定
+            try:
+                # 深度データを整形
+                if depth.size == 384*256:  # 期待サイズの場合
                     depth_map = depth.reshape(1, 256, 384, 1)
-            
-            logger.info(f"Reshaped depth map shape: {depth_map.shape}")
-            
-            depth_map = np.ascontiguousarray(depth_map)
-            
-            inference_time = time.time() - start_time
-            return depth_map, inference_time
+                else:
+                    # 形状が異なる場合、ログに出力して可能な限り調整
+                    logger.warning(f"Unexpected depth size: {depth.size}, expected: {384*256}")
+                    h = int(np.sqrt(depth.size / 384))
+                    w = 384 if h > 0 else int(np.sqrt(depth.size))
+                    h = h or 256
+                    depth_map = depth.reshape(1, h, w, 1)
+                    
+                depth_map = np.ascontiguousarray(depth_map)
+                
+                # 正規化して値の範囲をチェック
+                min_val = np.min(depth_map)
+                max_val = np.max(depth_map)
+                logger.debug(f"Depth range: {min_val:.4f} to {max_val:.4f}")
+                
+                # 異常値チェック（NaNやInf）
+                if np.isnan(depth_map).any() or np.isinf(depth_map).any():
+                    logger.warning("Depth map contains NaN or Inf values")
+                    depth_map = np.nan_to_num(depth_map, nan=0.5, posinf=1.0, neginf=0.0)
+                
+                inference_time = time.time() - start_time
+                return depth_map, inference_time
+                
+            except Exception as e:
+                logger.error(f"Error in depth post-processing: {e}")
+                return self._generate_dummy_depth(frame), time.time() - start_time
             
         except Exception as e:
             logger.error(f"Inference error: {e}")
-            logger.error(f"推論エラー詳細: {type(e).__name__}, 深度配列サイズ: {depth.size if 'depth' in locals() else 'unknown'}")
             import traceback
             logger.error(traceback.format_exc())
-            return None, time.time() - start_time
+            return self._generate_dummy_depth(frame), time.time() - start_time
+    
+    def _generate_dummy_depth(self, frame):
+        """テスト用のダミー深度マップを生成"""
+        if frame is None:
+            h, w = 480, 640
+        else:
+            h, w = frame.shape[:2]
+            
+        # モデルの出力サイズに合わせる
+        output_h, output_w = 256, 384
         
+        # グラデーションパターン: 下に行くほど深度値が大きくなる（近い）
+        dummy_depth = np.zeros((1, output_h, output_w, 1), dtype=np.float32)
+        for y in range(output_h):
+            value = 0.1 + 0.8 * (y / output_h)
+            dummy_depth[0, y, :, 0] = value
+            
+        logger.debug(f"Generated dummy depth map: {dummy_depth.shape}")
+        return dummy_depth
+    
     def is_available(self):
         """モデルが利用可能かどうかを返す"""
         return self.model is not None
