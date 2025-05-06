@@ -578,7 +578,6 @@ def depth_processing_thread():
                     occupancy_grid = create_top_down_occupancy_grid(
                         point_cloud,
                         grid_resolution=0.05,  # 5cm解像度
-                        grid_size=(200, 200),  # 10m x 10m (200 x 0.05m)
                         z_threshold=0.5        # 高さ0.5m以上を障害物と判定
                     )
                     logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")  # <-- この行を追加
