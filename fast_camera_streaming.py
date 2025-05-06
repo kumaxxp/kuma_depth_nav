@@ -152,13 +152,13 @@ async def root():
                 <!-- カメラビュー -->
                 <div class="video-item">
                     <h3>カメラ</h3>
-                    <img src="/video_feed" width="384" height="256" alt="Camera Feed">
+                    <img src="/video" width="384" height="256" alt="Camera Feed">
                 </div>
                 
                 <!-- 深度マップビュー -->
                 <div class="video-item">
                     <h3>深度マップ</h3>
-                    <img src="/depth_feed" width="384" height="256" alt="Depth Map">
+                    <img src="/depth_video" width="384" height="256" alt="Depth Map">
                 </div>
                 
                 <!-- トップビュー -->
