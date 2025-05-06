@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 # カスタムモジュールのインポート
 from depth_processor import (
     DepthProcessor, create_depth_visualization, create_default_depth_image,
-    create_depth_grid_visualization,
+    create_depth_grid_visualization, convert_to_absolute_depth,  # この行を修正
     depth_to_point_cloud, create_top_down_occupancy_grid, visualize_occupancy_grid
 )
 
