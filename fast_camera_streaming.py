@@ -314,6 +314,7 @@ def depth_processing_thread():
         logger.info("Depth model initialized successfully")
     
     frame_count = 0
+    process_every_n_frames = 3  # 3フレームに1回だけ処理
     
     # デバッグ用: 最初のフレームの可視化テスト
     debug_first_frame = True
@@ -323,6 +324,13 @@ def depth_processing_thread():
             # キューからフレームを取得
             frame = frame_queue.get(timeout=1.0)
             
+            # N フレームに1回だけ処理
+            if frame_count % process_every_n_frames != 0:
+                continue
+                
+            # 処理開始時間を記録
+            start_time = time.time()
+                        
             # 深度推論実行
             depth_map, inference_time = depth_processor.predict(frame)
             
@@ -330,29 +338,7 @@ def depth_processing_thread():
             if depth_map is None or depth_map.size == 0:
                 logger.warning("Empty depth map received. Skipping...")
                 continue
-                
-            # 最初のフレームをファイルに保存（デバッグ用）
-            if debug_first_frame:
-                try:
-                    # 深度マップ統計
-                    min_val = np.min(depth_map)
-                    max_val = np.max(depth_map)
-                    mean_val = np.mean(depth_map)
-                    logger.info(f"First depth map - Min: {min_val:.4f}, Max: {max_val:.4f}, Mean: {mean_val:.4f}")
-                    
-                    # 可視化して保存
-                    first_vis = create_depth_visualization(depth_map, frame.shape)
-                    cv2.imwrite("first_depth_frame.jpg", first_vis)
-                    logger.info("First depth frame visualization saved to: first_depth_frame.jpg")
-                    
-                    # 形状情報
-                    logger.info(f"Frame shape: {frame.shape}")
-                    logger.info(f"Depth map shape: {depth_map.shape}")
-                    
-                    debug_first_frame = False
-                except Exception as e:
-                    logger.error(f"Error saving debug frame: {e}")
-            
+                            
             # 深度マップを可視化
             logger.debug(f"Creating depth visualization for frame {frame_count}")
             try:
