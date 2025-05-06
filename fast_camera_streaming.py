@@ -546,6 +546,41 @@ def depth_processing_thread():
                 import traceback
                 logger.error(traceback.format_exc())
             
+            # 深度マップから絶対深度に変換した後に追加
+            # トップビューの生成（10フレームに1回程度）
+            if is_valid_depth and frame_count % 10 == 0:
+                try:
+                    # 点群に変換
+                    point_cloud = depth_to_point_cloud(
+                        absolute_depth,
+                        fx=depth_config.get("fx", 500),
+                        fy=depth_config.get("fy", 500)
+                    )
+                    
+                    # 占有グリッドに変換
+                    occupancy_grid = create_top_down_occupancy_grid(
+                        point_cloud,
+                        grid_resolution=0.05,  # 5cm解像度
+                        grid_size=(200, 200),  # 10m x 10m (200 x 0.05m)
+                        z_threshold=0.5        # 高さ0.5m以上を障害物と判定
+                    )
+                    
+                    # 占有グリッドを可視化
+                    topview_image = visualize_occupancy_grid(occupancy_grid)
+                    
+                    # トップビューをキューに追加
+                    try:
+                        if topview_image_queue.full():
+                            topview_image_queue.get_nowait()  # 古いデータを削除
+                        topview_image_queue.put_nowait(topview_image)
+                        logger.debug("Topview visualization added to queue")
+                    except Exception as e:
+                        logger.warning(f"Failed to update topview queue: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to create topview: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+            
             # 定期的にログ出力
             if frame_count % 30 == 0:
                 logger.info(f"Processed {frame_count} depth frames, inference time: {inference_time:.3f}s")
