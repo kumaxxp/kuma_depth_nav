@@ -277,6 +277,9 @@ def depth_processing_thread():
     # 設定から絶対深度変換のスケーリング係数を取得
     scaling_factor = config["depth"].get("scaling_factor", 15.0)
     
+    # 深度処理スレッド内で定期的に画像を保存
+    debug_save_interval = 100  # 100フレームごとに保存
+    
     while is_running:
         try:
             # キューからフレームを取得
@@ -303,6 +306,23 @@ def depth_processing_thread():
 
             # 深度マップを可視化する前
             logger.info(f"Visualizing depth map with shape: {depth_map.shape}")
+
+            # テストモードフラグ
+            test_mode = False
+            if test_mode:
+                # テスト用のダミー深度マップを生成
+                h, w = frame.shape[:2]
+                dummy_depth = np.zeros((1, 256, 384, 1), dtype=np.float32)
+                for y in range(256):
+                    # 上から下に向かって0.1→0.9のグラデーション
+                    value = 0.1 + 0.8 * (y / 255)
+                    dummy_depth[0, y, :, 0] = value
+                logger.info("Generated dummy depth map for testing")
+                depth_map = dummy_depth
+            
+            # 深度マップを可視化
+            logger.info(f"Depth map before visualization - shape: {depth_map.shape}, type: {type(depth_map)}")
+            logger.info(f"Depth map range: min={np.min(depth_map)}, max={np.max(depth_map)}")
 
             # オプション: 相対深度から絶対深度への変換
             # absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor)
@@ -370,6 +390,20 @@ def depth_processing_thread():
             # ログ出力（20フレームごと）
             if frame_count % 20 == 0:
                 logger.info(f"Depth inference completed in {inference_time:.3f}s, shape: {depth_map.shape}")
+            
+            # 深度処理スレッド内で定期的に画像を保存
+            if frame_count % debug_save_interval == 0:
+                try:
+                    # 元のフレームを保存
+                    cv2.imwrite(f"debug_frame_{frame_count}.jpg", frame)
+                    
+                    # 深度マップを可視化して保存
+                    colored_depth = create_depth_visualization(depth_map, frame.shape)
+                    if colored_depth is not None:
+                        cv2.imwrite(f"debug_depth_{frame_count}.jpg", colored_depth)
+                        logger.info(f"Debug images saved for frame {frame_count}")
+                except Exception as e:
+                    logger.error(f"Failed to save debug images: {e}")
             
         except queue.Empty:
             # タイムアウト - 何もしない

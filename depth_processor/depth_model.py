@@ -47,6 +47,18 @@ class DepthProcessor:
         try:
             logger.info(f"Loading model from {self.model_path}")
             session = axe.InferenceSession(self.model_path)
+    
+            # モデル情報を出力
+            inputs = session.get_inputs()
+            logger.info(f"Model inputs: {[x.name for x in inputs]}")
+            if inputs:
+                logger.info(f"Input shape: {inputs[0].shape}, type: {inputs[0].type}")
+                
+            outputs = session.get_outputs()
+            logger.info(f"Model outputs: {[x.name for x in outputs]}")
+            if outputs:
+                logger.info(f"Output shape: {outputs[0].shape}, type: {outputs[0].type}")
+    
             logger.info("Model loaded successfully")
             return session
         except Exception as e:
@@ -90,13 +102,18 @@ class DepthProcessor:
         try:
             # フレーム前処理
             input_tensor = self.process_frame(frame)
+            logger.info(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
+            logger.info(f"Input tensor range: min={np.min(input_tensor)}, max={np.max(input_tensor)}")
             
             # 推論実行
+            logger.info(f"Starting inference with input name: {self.input_name}")
             depth = self.model.run(None, {self.input_name: input_tensor})[0]
+            logger.info(f"Inference completed successfully")
             
             # 後処理 - reshape操作を修正
             # オリジナルのモデル出力形状を確認
             logger.info(f"Raw depth output shape: {depth.shape}, size: {depth.size}")
+            logger.info(f"Depth output range: min={np.min(depth)}, max={np.max(depth)}")
             
             # 適切な形状に変換
             # 一般的な単眼深度推定モデルは(H,W)または(1,H,W)の形状で出力する

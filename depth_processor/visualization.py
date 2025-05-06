@@ -142,3 +142,34 @@ def create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6, scaling
         cv2.line(grid_image, (x, 0), (x, h), (100, 100, 100), 1)
     
     return grid_image
+
+# fast_camera_streaming.pyの最初の方で、一度だけテスト実行
+def test_visualization():
+    """可視化関数のテスト"""
+    try:
+        # テスト用の深度マップを生成 (256x384, 値は0.1-0.9のグラデーション)
+        test_depth = np.zeros((1, 256, 384, 1), dtype=np.float32)
+        for y in range(256):
+            value = 0.1 + 0.8 * (y / 255)
+            test_depth[0, y, :, 0] = value
+            
+        # 可視化のテスト
+        from depth_processor import create_depth_visualization
+        test_image = create_depth_visualization(test_depth, (480, 640))
+        
+        # 結果を確認
+        if test_image is not None and test_image.shape[0] > 0:
+            logger.info(f"Visualization test successful. Output shape: {test_image.shape}")
+            
+            # ファイルに保存してブラウザ等で確認できるようにする
+            cv2.imwrite("test_depth_viz.jpg", test_image)
+            logger.info("Test visualization saved to: test_depth_viz.jpg")
+        else:
+            logger.error("Visualization function failed to produce valid output")
+    except Exception as e:
+        logger.error(f"Visualization test error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+# アプリ起動時にテストを実行
+test_visualization()
