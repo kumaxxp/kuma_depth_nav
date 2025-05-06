@@ -72,30 +72,40 @@ class DepthProcessor:
         return np.expand_dims(resized_frame[..., ::-1], axis=0)
         
     def predict(self, frame):
-        """
-        深度推定の実行
+    """
+    深度推定を実行
+    
+    Args:
+        frame: 入力画像
         
-        Args:
-            frame: 入力画像
-            
-        Returns:
-            (depth_map, inference_time): 深度マップと推論時間
-        """
-        if not self.model or not self.input_name:
-            raise ValueError("モデルが初期化されていません")
-            
-        # 画像の前処理
-        start_time = time.time()
+    Returns:
+        depth_map: 深度マップ
+        inference_time: 推論時間
+    """
+    if not self.is_available():
+        return None, 0.0
+        
+    start_time = time.time()
+    
+    try:
+        # フレーム前処理
         input_tensor = self.process_frame(frame)
         
-        # 深度推論
-        output = self.model.run(None, {self.input_name: input_tensor})
+        # 推論実行
+        depth = self.model.run(None, {self.input_name: input_tensor})[0]
+        
+        # 後処理
+        depth = depth.reshape(1, depth.shape[0], depth.shape[1], 1)
+        depth_map = np.ascontiguousarray(depth)
+        
+        # サイズやスケールの調整が必要な場合はここで行う
+        
         inference_time = time.time() - start_time
-        
-        # 深度マップを取得
-        depth_map = output[0]
-        
         return depth_map, inference_time
+        
+    except Exception as e:
+        logger.error(f"Inference error: {e}")
+        return None, time.time() - start_time
         
     def is_available(self):
         """モデルが利用可能かどうかを返す"""

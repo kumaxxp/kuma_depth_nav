@@ -291,7 +291,7 @@ def depth_processing_thread():
                 continue
             else:
                 # 深度マップの統計情報をログに出力
-                if frame_count % 20 == 0:  # 20フレームごとに出力
+                if frame_count % 10 == 0:  # 10フレームごとに出力
                     valid_depths = depth_map[depth_map > 0.01]
                     if len(valid_depths) > 0:
                         min_val = valid_depths.min()
@@ -300,6 +300,9 @@ def depth_processing_thread():
                         logger.info(f"Depth stats - Min: {min_val:.4f}, Max: {max_val:.4f}, Mean: {mean_val:.4f}")
                     else:
                         logger.warning("No valid depth values found!")
+
+            # 深度マップを可視化する前
+            logger.info(f"Visualizing depth map with shape: {depth_map.shape}")
 
             # オプション: 相対深度から絶対深度への変換
             # absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor)
@@ -316,28 +319,17 @@ def depth_processing_thread():
             
             # 深度マップを可視化
             try:
-                # 軽量化のためcopy操作を最小限に
+                # 元の単純な方法で深度マップを可視化
                 colored_depth = create_depth_visualization(depth_map, frame.shape)
                 
-                # 可視化に成功したら深度画像をキューに追加（最適化版）
-                if colored_depth is not None and colored_depth.shape[0] > 0:
-                    with depth_image_queue.mutex:
+                # 可視化に成功したら深度画像をキューに追加
+                if colored_depth is not None:
+                    try:
                         if depth_image_queue.full():
-                            depth_image_queue.queue.clear()
-                        depth_image_queue.queue.append(colored_depth)
-                        depth_image_queue.not_empty.notify()
-                    
-                # 深度グリッド可視化も生成（毎フレーム）
-                depth_grid = create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6)
-                
-                # 深度グリッド画像をキューに追加（最適化版）
-                if depth_grid is not None and depth_grid.shape[0] > 0:
-                    with depth_grid_queue.mutex:
-                        if depth_grid_queue.full():
-                            depth_grid_queue.queue.clear()
-                        depth_grid_queue.queue.append(depth_grid)
-                        depth_grid_queue.not_empty.notify()
-                
+                            depth_image_queue.get_nowait()  # 古い深度データを削除
+                        depth_image_queue.put_nowait(colored_depth)
+                    except Exception as e:
+                        logger.warning(f"Failed to update depth image queue: {e}")
             except Exception as e:
                 logger.warning(f"Failed to visualize depth map: {e}")
 
