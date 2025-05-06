@@ -3,6 +3,16 @@
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$BASE_DIR" || exit 1
 
+# Python コマンドの確認
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_CMD="python"
+else
+    echo "ERROR: Python が見つかりません。インストールしてください。"
+    exit 1
+fi
+
 # 設定ファイルのチェック
 if [ ! -f "config.json" ]; then
     echo "[WARNING] config.jsonが見つかりません。デフォルト設定を使用します。"
@@ -23,5 +33,5 @@ if command -v v4l2-ctl > /dev/null; then
 fi
 
 # Python実行
-echo "プログラムを起動中..."
-exec python3 fast_camera_streaming.py "$@"
+echo "プログラムを起動中... ($PYTHON_CMD)"
+exec $PYTHON_CMD fast_camera_streaming.py "$@"

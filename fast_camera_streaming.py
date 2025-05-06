@@ -16,7 +16,7 @@ from depth_processor import (
 )
 
 # ユーティリティのインポート
-from utils import load_config, setup_logger, optimize_linux_performance
+from utils import load_config, setup_logger
 
 # 設定の読み込み
 config = load_config()
