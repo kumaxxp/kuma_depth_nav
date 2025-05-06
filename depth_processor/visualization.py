@@ -118,7 +118,7 @@ def depth_to_color(depth_normalized):
 
 def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8, 8), max_distance=10.0, cell_size=60):
     """
-    深度マップをグリッド形式で可視化
+    深度マップをグリッド形式で可視化（改善版）
     
     Args:
         depth_map: 深度マップ（相対深度）
@@ -138,13 +138,27 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
         try:
             # スケーリング係数でメートル単位に変換
             absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor=15.0)
+            logger.debug("Created absolute depth from relative depth")
         except Exception as e:
-            print(f"Error converting to absolute depth: {e}")
+            logger.error(f"Error converting to absolute depth: {e}")
             return np.zeros((rows * cell_size, cols * cell_size, 3), dtype=np.uint8) + 30
-    
+            
     # グリッド分割のためのインデックス計算
     row_indices = np.linspace(0, h-1, rows+1).astype(int)
     col_indices = np.linspace(0, w-1, cols+1).astype(int)
+    
+    # デバッグ: 深度値の範囲を確認
+    try:
+        valid_depths = absolute_depth[absolute_depth > 0.01]
+        if valid_depths.size > 0:
+            min_depth = valid_depths.min()
+            max_depth = valid_depths.max()
+            mean_depth = valid_depths.mean()
+            logger.debug(f"Depth range: min={min_depth:.2f}m, max={max_depth:.2f}m, mean={mean_depth:.2f}m")
+        else:
+            logger.warning("No valid depth values found")
+    except Exception as e:
+        logger.error(f"Error analyzing depth data: {e}")
     
     # 出力画像の初期化
     output_h = rows * cell_size
@@ -163,133 +177,18 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             r_start, r_end = row_indices[i], row_indices[i+1]
             c_start, c_end = col_indices[j], col_indices[j+1]
             
-            # セルの深度値を取得
-            cell_depth = absolute_depth[r_start:r_end, c_start:c_end]
+            # セルの深度値を取得 - より多くのピクセルを取得するため、境界を少し拡張
+            r_start_exp = max(0, r_start - 5)
+            r_end_exp = min(h, r_end + 5)
+            c_start_exp = max(0, c_start - 5)
+            c_end_exp = min(w, c_end + 5)
             
-            # 有効な深度値（範囲内）の平均を計算
-            valid_depth = cell_depth[(cell_depth > 0.1) & (cell_depth < max_distance)]
+            cell_depth = absolute_depth[r_start_exp:r_end_exp, c_start_exp:c_end_exp]
+            
+            # 有効な深度値の条件を緩和（0.1m〜15mの範囲で有効と判断）
+            valid_depth = cell_depth[(cell_depth > 0.1) & (cell_depth < 15.0)]
             
             cell_y_start = i * cell_size
             cell_x_start = j * cell_size
             
-            if valid_depth.size > 0:
-                avg_depth = np.mean(valid_depth)
-                
-                # 深度に応じた色を設定（赤→黄→緑→水色→青）
-                normalized_depth = min(avg_depth / max_distance, 1.0)
-                
-                # カラーマップの適用（近いほど赤、遠いほど青）
-                if normalized_depth < 0.2:  # 非常に近い: 赤
-                    color = (0, 0, 220)
-                elif normalized_depth < 0.4:  # 近い: 黄色
-                    color = (0, 220, 220)
-                elif normalized_depth < 0.6:  # 中間: 緑
-                    color = (0, 220, 0)
-                elif normalized_depth < 0.8:  # 遠い: 水色
-                    color = (220, 220, 0)
-                else:  # 非常に遠い: 青
-                    color = (220, 0, 0)
-                
-                # セルを描画（内部に余白を持たせる）
-                cv2.rectangle(
-                    output, 
-                    (cell_x_start + 2, cell_y_start + 2), 
-                    (cell_x_start + cell_size - 2, cell_y_start + cell_size - 2),
-                    color, 
-                    -1  # 塗りつぶし
-                )
-                
-                # 距離テキストを描画
-                text = f"{avg_depth:.1f}m"
-                text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
-                text_x = cell_x_start + (cell_size - text_size[0]) // 2
-                text_y = cell_y_start + (cell_size + text_size[1]) // 2
-                
-                # テキストの背景（読みやすくするため）
-                cv2.putText(
-                    output, 
-                    text, 
-                    (text_x, text_y), 
-                    font, 
-                    font_scale, 
-                    (0, 0, 0),  # 黒（縁取り）
-                    font_thickness + 2
-                )
-                
-                # テキスト
-                cv2.putText(
-                    output, 
-                    text, 
-                    (text_x, text_y), 
-                    font, 
-                    font_scale, 
-                    (255, 255, 255),  # 白
-                    font_thickness
-                )
-            else:
-                # データがない場合は濃い灰色のセル
-                cv2.rectangle(
-                    output, 
-                    (cell_x_start + 2, cell_y_start + 2), 
-                    (cell_x_start + cell_size - 2, cell_y_start + cell_size - 2),
-                    (80, 80, 80), 
-                    -1
-                )
-                
-                # "N/A" テキスト
-                text = "N/A"
-                text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
-                text_x = cell_x_start + (cell_size - text_size[0]) // 2
-                text_y = cell_y_start + (cell_size + text_size[1]) // 2
-                
-                cv2.putText(
-                    output, 
-                    text, 
-                    (text_x, text_y), 
-                    font, 
-                    font_scale, 
-                    (150, 150, 150),  # 明るい灰色
-                    font_thickness
-                )
-    
-    # グリッド線を描画
-    for i in range(rows+1):
-        y = i * cell_size
-        cv2.line(output, (0, y), (output_w, y), (50, 50, 50), 1)
-    
-    for j in range(cols+1):
-        x = j * cell_size
-        cv2.line(output, (x, 0), (x, output_h), (50, 50, 50), 1)
-    
-    return output
-
-# fast_camera_streaming.pyの最初の方で、一度だけテスト実行
-def test_visualization():
-    """可視化関数のテスト"""
-    try:
-        # テスト用の深度マップを生成 (256x384, 値は0.1-0.9のグラデーション)
-        test_depth = np.zeros((1, 256, 384, 1), dtype=np.float32)
-        for y in range(256):
-            value = 0.1 + 0.8 * (y / 255)
-            test_depth[0, y, :, 0] = value
-            
-        # 可視化のテスト
-        from depth_processor import create_depth_visualization
-        test_image = create_depth_visualization(test_depth, (480, 640))
-        
-        # 結果を確認
-        if test_image is not None and test_image.shape[0] > 0:
-            logger.info(f"Visualization test successful. Output shape: {test_image.shape}")
-            
-            # ファイルに保存してブラウザ等で確認できるようにする
-            cv2.imwrite("test_depth_viz.jpg", test_image)
-            logger.info("Test visualization saved to: test_depth_viz.jpg")
-        else:
-            logger.error("Visualization function failed to produce valid output")
-    except Exception as e:
-        logger.error(f"Visualization test error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-
-# アプリ起動時にテストを実行
-test_visualization()
+            # データ量の閾値を下げる（より少ないデータでも有効と判断）

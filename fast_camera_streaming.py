@@ -474,11 +474,19 @@ def depth_processing_thread():
 
             # 深度グリッドの生成を追加
             try:
+                # 深度の範囲を確認
+                valid_depths = absolute_depth[absolute_depth > 0.1]
+                if valid_depths.size > 0:
+                    min_abs_depth = valid_depths.min()
+                    max_abs_depth = valid_depths.max()
+                    logger.info(f"Absolute depth range: min={min_abs_depth:.2f}m, max={max_abs_depth:.2f}m")
+                
+                # 深度グリッド生成（絶対深度を渡す）
                 depth_grid = create_depth_grid_visualization(
                     current_depth_map,
                     absolute_depth=absolute_depth,  # 絶対深度を渡す
                     grid_size=(8, 8),  # 8x8のグリッド
-                    max_distance=10.0,  # 最大10メートル
+                    max_distance=max(10.0, max_abs_depth * 1.2),  # 動的に最大距離を設定
                     cell_size=60        # セルサイズ60ピクセル
                 )
                 
