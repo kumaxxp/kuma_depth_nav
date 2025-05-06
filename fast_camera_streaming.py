@@ -139,23 +139,29 @@ async def root():
         
         <div class="container">
             <div class="video-container">
-                <h2>Camera Feed</h2>
-                <img src="/video" alt="Camera Feed">
-            </div>
-            
-            <div class="video-container">
-                <h2>Depth Map</h2>
-                <img src="/depth_video" alt="Depth Map">
-            </div>
-            
-            <div class="video-container">
-                <h2>Depth Grid</h2>
-                <img src="/depth_grid" alt="Depth Grid">
-            </div>
-            
-            <div class="video-container">
-                <h2>Top View</h2>
-                <img src="/topview" alt="Top View">
+                <!-- カメラビュー -->
+                <div class="video-item">
+                    <h3>カメラ</h3>
+                    <img src="/video_feed" width="384" height="256" alt="Camera Feed">
+                </div>
+                
+                <!-- 深度マップビュー -->
+                <div class="video-item">
+                    <h3>深度マップ</h3>
+                    <img src="/depth_feed" width="384" height="256" alt="Depth Map">
+                </div>
+                
+                <!-- トップビュー -->
+                <div class="video-item">
+                    <h3>トップビュー</h3>
+                    <img src="/topview" width="384" height="384" alt="Top View">
+                </div>
+                
+                <!-- 深度グリッド -->
+                <div class="video-item">
+                    <h3>深度グリッド</h3>
+                    <img src="/depth_grid" width="384" height="288" alt="Depth Grid">
+                </div>
             </div>
         </div>
         
