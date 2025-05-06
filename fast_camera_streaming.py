@@ -289,18 +289,27 @@ def get_video_stream():
 
 def get_depth_stream():
     """深度画像ストリーム生成関数"""
+    # 前回の有効な深度マップを保持
+    last_valid_depth_image = create_default_depth_image()
+    
     while True:
         try:
-            # キューが空の場合はデフォルト深度画像を使用
+            # キューが空の場合は前回の有効な深度画像を使用
             if depth_image_queue.empty():
-                frame = create_default_depth_image()
-                logger.debug("Using default depth image")
+                frame = last_valid_depth_image  # デフォルト画像ではなく前回の有効な画像を使用
+                logger.debug("Using last valid depth image")
             else:
+                # 新しい深度画像を取得
                 frame = depth_image_queue.get_nowait()
+                
+                # 有効な画像の場合のみ保存（サイズチェック）
+                if frame is not None and frame.shape[0] > 0:
+                    last_valid_depth_image = frame.copy()  # 有効な画像を保存
             
             # JPEG にエンコード
             ret, buffer = cv2.imencode('.jpg', frame)
             if not ret:
+                logger.warning("JPEG encode failed for depth image.")
                 continue
                 
             # HTTP レスポンス形式に変換
@@ -370,12 +379,13 @@ def depth_processing_thread():
     process_every_n_frames = 3  # 3フレームに1回だけ処理
     last_log_time = time.time()
     
-    # デバッグ用: 最初のフレームの可視化テスト
-    debug_first_frame = True
+    # 前回の有効な深度マップと可視化結果を保存
+    last_valid_depth_map = None
+    last_valid_colored_depth = None
     
     while is_running:
         try:
-            # キューからフレームを取得（ビデオストリームスレッドが共有するフレーム）
+            # キューからフレームを取得
             frame = frame_queue.get(timeout=1.0)
             frame_count += 1
             
@@ -387,41 +397,65 @@ def depth_processing_thread():
             # 処理開始時間を記録
             start_time = time.time()
             
-            # 定期的な状態レポート
-            current_time = time.time()
-            if current_time - last_log_time > 10.0:  # 10秒ごとに状態報告
-                logger.info(f"Depth thread status: received {frame_count} frames, processed {process_count} frames")
-                last_log_time = current_time
+            # 深度推論実行
+            current_depth_map, inference_time = depth_processor.predict(frame)
             
-            # 深度推論実行（メインスレッドから共有されたフレームを使用）
-            depth_map, inference_time = depth_processor.predict(frame)
+            # 深度マップが有効かチェック
+            is_valid_depth = (current_depth_map is not None and current_depth_map.size > 0)
             
-            # 深度データが有効であることを確認
-            if depth_map is None or depth_map.size == 0:
-                logger.warning("Empty depth map received. Skipping...")
-                continue
-                            
+            # 有効でない場合、前回の有効なマップを使用
+            if not is_valid_depth:
+                logger.warning("Invalid depth map received. Using last valid map.")
+                if last_valid_depth_map is not None:
+                    current_depth_map = last_valid_depth_map
+                else:
+                    # まだ有効なマップがない場合はスキップ
+                    logger.warning("No previous valid depth map available. Skipping...")
+                    continue
+            else:
+                # 有効なマップを保存
+                last_valid_depth_map = current_depth_map.copy()
+            
             # 深度マップを可視化
-            logger.debug(f"Creating depth visualization for frame {frame_count}")
             try:
-                colored_depth = create_depth_visualization(depth_map, frame.shape)
+                current_colored_depth = create_depth_visualization(current_depth_map, frame.shape)
                 
-                # 可視化に成功したら深度画像をキューに追加
-                if colored_depth is not None and colored_depth.shape[0] > 0:
+                # 可視化が有効かチェック
+                is_valid_visualization = (current_colored_depth is not None and 
+                                         current_colored_depth.shape[0] > 0)
+                
+                if is_valid_visualization:
+                    # 有効な可視化結果を保存
+                    last_valid_colored_depth = current_colored_depth.copy()
+                    
+                    # キューに追加
                     try:
                         if depth_image_queue.full():
-                            depth_image_queue.get_nowait()  # 古いデータを削除
-                        depth_image_queue.put_nowait(colored_depth)
-                        logger.debug(f"Depth visualization added to queue, shape: {colored_depth.shape}")
+                            depth_image_queue.get_nowait()
+                        depth_image_queue.put_nowait(current_colored_depth)
                     except Exception as e:
                         logger.warning(f"Failed to update depth image queue: {e}")
                 else:
-                    logger.warning("Empty visualization result")
+                    # 無効な場合、前回の有効な可視化結果を使用
+                    logger.warning("Invalid depth visualization. Using last valid one.")
+                    if last_valid_colored_depth is not None:
+                        try:
+                            if depth_image_queue.full():
+                                depth_image_queue.get_nowait()
+                            depth_image_queue.put_nowait(last_valid_colored_depth)
+                        except Exception as e:
+                            logger.warning(f"Failed to update depth image queue with previous result: {e}")
             except Exception as e:
-                logger.error(f"Failed to visualize depth map: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-                
+                logger.error(f"Error in depth visualization: {e}")
+                # エラー時も前回の有効結果を使用
+                if last_valid_colored_depth is not None:
+                    try:
+                        if depth_image_queue.full():
+                            depth_image_queue.get_nowait()
+                        depth_image_queue.put_nowait(last_valid_colored_depth)
+                    except Exception as ex:
+                        logger.warning(f"Queue operation failed: {ex}")
+            
             # 深度マップから絶対深度に変換
             absolute_depth = convert_to_absolute_depth(
                 depth_map, 
