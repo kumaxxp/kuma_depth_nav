@@ -82,7 +82,6 @@ class DepthProcessor:
             depth_map: 深度マップ
             inference_time: 推論時間
         """
-
         if not self.is_available():
             return None, 0.0
             
@@ -95,17 +94,40 @@ class DepthProcessor:
             # 推論実行
             depth = self.model.run(None, {self.input_name: input_tensor})[0]
             
-            # 後処理
-            depth = depth.reshape(1, depth.shape[0], depth.shape[1], 1)
-            depth_map = np.ascontiguousarray(depth)
+            # 後処理 - reshape操作を修正
+            # オリジナルのモデル出力形状を確認
+            logger.info(f"Raw depth output shape: {depth.shape}, size: {depth.size}")
             
-            # サイズやスケールの調整が必要な場合はここで行う
+            # 適切な形状に変換
+            # 一般的な単眼深度推定モデルは(H,W)または(1,H,W)の形状で出力する
+            if len(depth.shape) == 2:
+                # すでに2次元の場合
+                depth_map = depth.reshape(1, depth.shape[0], depth.shape[1], 1)
+            elif len(depth.shape) == 3 and depth.shape[0] == 1:
+                # バッチ次元がある3次元の場合
+                depth_map = depth.reshape(1, depth.shape[1], depth.shape[2], 1)
+            else:
+                # それ以外の場合は推論された深度マップの形状を元にreshape
+                h = int(np.sqrt(depth.size / 256))
+                w = int(np.sqrt(depth.size / 384))
+                if h * w * 384 == depth.size:
+                    depth_map = depth.reshape(1, h, w, 1)
+                else:
+                    # 384×256に強制変換
+                    depth_map = depth.reshape(1, 256, 384, 1)
+            
+            logger.info(f"Reshaped depth map shape: {depth_map.shape}")
+            
+            depth_map = np.ascontiguousarray(depth_map)
             
             inference_time = time.time() - start_time
             return depth_map, inference_time
             
         except Exception as e:
             logger.error(f"Inference error: {e}")
+            logger.error(f"推論エラー詳細: {type(e).__name__}, 深度配列サイズ: {depth.size if 'depth' in locals() else 'unknown'}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None, time.time() - start_time
         
     def is_available(self):
