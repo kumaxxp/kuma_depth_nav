@@ -78,6 +78,7 @@ app = FastAPI(lifespan=lifespan)
 process_thread = None
 is_running = True
 depth_processor = None  # 深度プロセッサ
+camera_instance = None  # カメラインスタンスをグローバルに保持
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -187,17 +188,53 @@ async def root():
     
     return html_content
 
-def initialize_camera(index=0, width=640, height=480):
+def initialize_camera(index=0, width=640, height=480, force_new=False):
     """カメラを初期化します"""
-    cam = cv2.VideoCapture(index, cv2.CAP_V4L2)
-    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    return cam
+    global camera_instance
+    
+    # 既に初期化済みのカメラがあり、force_newがFalseなら再利用
+    if camera_instance is not None and camera_instance.isOpened() and not force_new:
+        logger.info("Reusing existing camera instance")
+        return camera_instance
+    
+    # 古いインスタンスがあれば解放
+    if camera_instance is not None:
+        camera_instance.release()
+        camera_instance = None
+    
+    try:
+        # プラットフォームに応じた初期化
+        import platform
+        if platform.system() == "Linux":
+            logger.info(f"Initializing camera with V4L2: index {index}")
+            cam = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        else:
+            logger.info(f"Initializing camera with default API: index {index}")
+            cam = cv2.VideoCapture(index)
+        
+        if not cam.isOpened():
+            logger.error(f"Failed to open camera at index {index}")
+            return None
+        
+        # 設定
+        cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        
+        # グローバル変数に保存
+        camera_instance = cam
+        
+        return cam
+    except Exception as e:
+        logger.error(f"Camera initialization error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
 
 def get_video_stream():
     """ビデオストリームを生成します"""
     camera = initialize_camera()
+    frame_counter = 0
 
     try:
         while True:
@@ -210,30 +247,45 @@ def get_video_stream():
 
             success, frame = camera.read()
             if not success or frame is None:
-                print("[WARN] Failed to read frame. Skipping...")
+                logger.warning("Failed to read frame. Skipping...")
+                time.sleep(0.1)
                 continue
                 
+
+            frame_counter += 1
+                
+
             # フレームをキューに追加（古いフレームは捨てる）
             try:
                 if frame_queue.full():
                     # キューがいっぱいなら古いフレームを取り出して捨てる
                     frame_queue.get_nowait()
                 frame_queue.put_nowait(frame)
-            except:
-                pass  # キューの操作でエラーが発生しても無視
+                
+                # 定期的にキュー状態を確認
+                if frame_counter % 100 == 0:
+                    logger.info(f"Frame queue size: {frame_queue.qsize()}/{frame_queue.maxsize}")
+            except Exception as e:
+                logger.warning(f"Queue operation error: {e}")
 
             # JPEGエンコード
             ret, buffer = cv2.imencode('.jpg', frame)
             if not ret:
-                print("[WARN] JPEG encode failed.")
+                logger.warning("JPEG encode failed.")
                 continue
 
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.001)  # スリープ時間を短縮
+            
+            # フレームレート制限
+            if frame_counter % 2 == 0:  # 2フレームに1回だけ送信
+                time.sleep(0.05)  # 約20FPS
+            else:
+                time.sleep(0.001)  # 高速処理（キューに追加するため）
 
     finally:
         camera.release()
+        logger.info("Camera released")
 
 def get_depth_stream():
     """深度画像ストリーム生成関数"""
@@ -314,24 +366,34 @@ def depth_processing_thread():
         logger.info("Depth model initialized successfully")
     
     frame_count = 0
+    process_count = 0
     process_every_n_frames = 3  # 3フレームに1回だけ処理
+    last_log_time = time.time()
     
     # デバッグ用: 最初のフレームの可視化テスト
     debug_first_frame = True
     
     while is_running:
         try:
-            # キューからフレームを取得
+            # キューからフレームを取得（ビデオストリームスレッドが共有するフレーム）
             frame = frame_queue.get(timeout=1.0)
+            frame_count += 1
             
             # N フレームに1回だけ処理
             if frame_count % process_every_n_frames != 0:
                 continue
                 
+            process_count += 1
             # 処理開始時間を記録
             start_time = time.time()
-                        
-            # 深度推論実行
+            
+            # 定期的な状態レポート
+            current_time = time.time()
+            if current_time - last_log_time > 10.0:  # 10秒ごとに状態報告
+                logger.info(f"Depth thread status: received {frame_count} frames, processed {process_count} frames")
+                last_log_time = current_time
+            
+            # 深度推論実行（メインスレッドから共有されたフレームを使用）
             depth_map, inference_time = depth_processor.predict(frame)
             
             # 深度データが有効であることを確認
