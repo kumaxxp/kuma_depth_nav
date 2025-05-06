@@ -116,7 +116,7 @@ def depth_to_color(depth_normalized):
     # HSVからBGRへの変換
     return cv2.cvtColor(np.uint8([[[hue, saturation, value]]]), cv2.COLOR_HSV2BGR)[0][0]
 
-def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8, 6), max_distance=10.0, cell_size=60):
+def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(16, 12), max_distance=10.0, cell_size=60):
 
     rows, cols = grid_size
 
