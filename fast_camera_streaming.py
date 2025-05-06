@@ -461,3 +461,9 @@ async def depth_metrics():
         return metrics
     else:
         return {"error": "No depth data available"}
+
+if __name__ == "__main__":
+    import uvicorn
+    host = server_config.get("host", "0.0.0.0")
+    port = server_config.get("port", 8888)
+    uvicorn.run(app, host=host, port=port)
