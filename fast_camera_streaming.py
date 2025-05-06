@@ -529,7 +529,7 @@ def depth_processing_thread():
             if frame_count % 100 == 0:
                 try:
                     debug_vis = create_depth_visualization(current_depth_map, frame.shape)
-                    cv2.imwrite(f"depth_frame_{frame_count}.jpg", debug_vis)
+                    # cv2.imwrite(f"depth_frame_{frame_count}.jpg", debug_vis)
                 except Exception:
                     pass
                 
