@@ -143,12 +143,23 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             
         # NaNやInfをチェックして置換
         depth_feature = np.nan_to_num(depth_feature, nan=0.5, posinf=1.0, neginf=0.01)
-        
-        # 値の範囲を確認
-        logger.debug(f"Depth feature range: {np.min(depth_feature):.4f} to {np.max(depth_feature):.4f}")
-        
-        # 深度の正規化（無効値を除外）
-        valid_depth = depth_feature[depth_feature > 0.01]
+
+        # grid_sizeにdepth_featureを分割
+        grid_depth = np.zeros((rows, cols), dtype=np.float32)
+        grid_depth_resized = np.zeros((rows * cell_size, cols * cell_size), dtype=np.float32)
+        for i in range(rows):
+            for j in range(cols):
+                # 各グリッドの範囲を計算
+                row_start = int(i * depth_feature.shape[0] / rows)
+                row_end = int((i + 1) * depth_feature.shape[0] / rows)
+                col_start = int(j * depth_feature.shape[1] / cols)
+                col_end = int((j + 1) * depth_feature.shape[1] / cols)
+
+                # グリッド内の深度値を平均化
+                grid_depth[i, j] = np.mean(depth_feature[row_start:row_end, col_start:col_end])
+
+        # grid_depthを正規化（無効値を除外）
+        valid_depth = grid_depth[grid_depth > 0.01]
         if len(valid_depth) > 0:
             min_depth = np.percentile(valid_depth, 5)  # 外れ値を除外
             max_depth = np.percentile(valid_depth, 95) # 外れ値を除外
@@ -156,41 +167,24 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             logger.warning("No valid depth values found")
             min_depth = 0.1
             max_depth = 0.9
-            
         logger.debug(f"Using depth range for normalization: {min_depth:.4f} to {max_depth:.4f}")
-        
+
         # 正規化して0-1範囲にする
-        normalized = np.zeros_like(depth_feature, dtype=np.float32)
-        valid_mask = depth_feature > 0.01
+        normalized = np.zeros_like(grid_depth, dtype=np.float32)
+        valid_mask = grid_depth > 0.01
         if np.any(valid_mask) and (max_depth > min_depth):
             normalized[valid_mask] = np.clip(
-                (depth_feature[valid_mask] - min_depth) / (max_depth - min_depth + 1e-6), 
+                (grid_depth[valid_mask] - min_depth) / (max_depth - min_depth + 1e-6), 
                 0, 1
             )
-            
+                    
         # colormap適用
         depth_colored = cv2.applyColorMap(
             (normalized * 255).astype(np.uint8), 
             cv2.COLORMAP_MAGMA
         )
 
-        # depth_coloredをグリッドサイズに分割し、分割した領域の平均値を計算する
-        grid_depth = np.zeros((rows, cols), dtype=np.float32)
-        for i in range(rows):
-            for j in range(cols):
-                # グリッドの範囲を計算
-                start_row = int(i * depth_colored.shape[0] / rows)
-                end_row = int((i + 1) * depth_colored.shape[0] / rows)
-                start_col = int(j * depth_colored.shape[1] / cols)
-                end_col = int((j + 1) * depth_colored.shape[1] / cols)
-
-                # グリッド内の平均値を計算
-                grid_depth[i, j] = np.mean(depth_feature[start_row:end_row, start_col:end_col])
-
-       # grid_depthをdepth_coloredと同じサイズにリサイズ
-        grid_depth_resized = cv2.resize(grid_depth, (depth_colored.shape[1], depth_colored.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-        return grid_depth_resized
+        return depth_colored
         
     except Exception as e:
         logger.error(f"Error in create_depth_visualization: {e}")
