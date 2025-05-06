@@ -98,77 +98,120 @@ def create_default_depth_image(width=640, height=480):
         default_depth_image[i, :] = [0, 0, int(255 * i / height)]
     return default_depth_image
 
-def create_depth_grid_visualization(depth_map, grid_cols=8, grid_rows=6, scaling_factor=15.0):
+def depth_to_color(depth_normalized):
     """
-    深度マップからグリッド表示を生成する
+    深度値を色に変換（青から赤のグラデーション）
     
     Args:
-        depth_map: 深度データ
-        grid_cols: グリッドの列数
-        grid_rows: グリッドの行数
-        scaling_factor: 絶対深度変換のためのスケーリング係数
+        depth_normalized: 正規化された深度値（0.0〜1.0）
         
     Returns:
-        可視化されたグリッド画像
+        色（BGR形式）
     """
-    if depth_map is None or depth_map.size == 0:
-        return create_default_depth_image()
+    # HSV色空間での青から赤へのグラデーション
+    hue = int((1.0 - depth_normalized) * 120)  # 0〜120の範囲
+    saturation = 255
+    value = 255
+    
+    # HSVからBGRへの変換
+    return cv2.cvtColor(np.uint8([[[hue, saturation, value]]]), cv2.COLOR_HSV2BGR)[0][0]
+
+def create_depth_grid_visualization(depth_map, grid_size=(8, 8), max_distance=10.0, cell_size=60):
+    """
+    深度マップをグリッド形式で可視化
+    
+    Args:
+        depth_map: 深度マップ（絶対深度）
+        grid_size: グリッドのサイズ（行数, 列数）
+        max_distance: 最大深度（メートル）
+        cell_size: セルの大きさ（ピクセル）
         
-    depth_feature = depth_map.reshape(depth_map.shape[-2:])
+    Returns:
+        numpy.ndarray: グリッド可視化画像
+    """
+    rows, cols = grid_size
+    h, w = depth_map.shape[:2] if len(depth_map.shape) > 2 else depth_map.shape
     
-    # 画像全体の大きさを定義
-    h, w = depth_feature.shape
-    cell_h, cell_w = h // grid_rows, w // grid_cols
+    # グリッド分割のためのインデックス計算
+    row_indices = np.linspace(0, h-1, rows+1).astype(int)
+    col_indices = np.linspace(0, w-1, cols+1).astype(int)
     
-    # グリッド画像を作成（黒背景）
-    grid_image = np.zeros((h, w, 3), dtype=np.uint8)
+    # 出力画像の初期化
+    output_h = rows * cell_size
+    output_w = cols * cell_size
+    output = np.zeros((output_h, output_w, 3), dtype=np.uint8)
     
-    # 各グリッドセルごとの処理
-    for row in range(grid_rows):
-        for col in range(grid_cols):
-            # セル範囲の定義
-            y1, y2 = row * cell_h, (row + 1) * cell_h
-            x1, x2 = col * cell_w, (col + 1) * cell_w
+    # テキスト設定
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    font_thickness = 1
+    
+    # 各セルの平均深度を計算して可視化
+    for i in range(rows):
+        for j in range(cols):
+            # セルの領域を取得
+            r_start, r_end = row_indices[i], row_indices[i+1]
+            c_start, c_end = col_indices[j], col_indices[j+1]
             
-            # セル内の深度の平均値を計算（無効値は除外）
-            cell_depth = depth_feature[y1:y2, x1:x2]
-            valid_depths = cell_depth[cell_depth > 0.01]
+            # セルの深度値を取得
+            cell_depth = depth_map[r_start:r_end, c_start:c_end]
             
-            if len(valid_depths) > 0:
-                avg_depth = np.mean(valid_depths)
+            # 有効な深度値の平均を計算（閾値以上の値のみ）
+            valid_depth = cell_depth[cell_depth > 0.1]
+            if valid_depth.size > 0:
+                avg_depth = np.mean(valid_depth)
                 
-                # 相対深度から絶対深度（メートル）へ変換
-                abs_depth = scaling_factor / avg_depth if avg_depth > 0.01 else 0
+                # 深度に応じた色を設定（近いほど赤、遠いほど青）
+                normalized_depth = min(avg_depth / max_distance, 1.0)
+                color = depth_to_color(normalized_depth)
                 
-                # 深度に基づいて色を決定（近い=赤、遠い=青）
-                # 絶対深度を0-10mの範囲で正規化（10m以上は10mとして扱う）
-                normalized_depth = min(abs_depth, 10.0) / 10.0
+                # セルを描画
+                cell_y_start = i * cell_size
+                cell_x_start = j * cell_size
+                cv2.rectangle(
+                    output, 
+                    (cell_x_start, cell_y_start), 
+                    (cell_x_start + cell_size, cell_y_start + cell_size),
+                    color, 
+                    -1  # 塗りつぶし
+                )
                 
-                # カラーマップの適用（HSV色空間で青から赤へ）
-                color = cv2.applyColorMap(np.array([[int(255 * (1 - normalized_depth))]], dtype=np.uint8), 
-                                         cv2.COLORMAP_JET)[0, 0]
-                
-                # セルを塗りつぶし
-                grid_image[y1:y2, x1:x2] = color
-                
-                # 深度値をテキストで表示（メートル単位）
-                text = f"{abs_depth:.1f}m"
-                text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                text_x = x1 + (cell_w - text_size[0]) // 2
-                text_y = y1 + (cell_h + text_size[1]) // 2
-                cv2.putText(grid_image, text, (text_x, text_y), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                # 距離テキストを描画
+                text = f"{avg_depth:.1f}m"
+                text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+                text_x = cell_x_start + (cell_size - text_size[0]) // 2
+                text_y = cell_y_start + (cell_size + text_size[1]) // 2
+                cv2.putText(
+                    output, 
+                    text, 
+                    (text_x, text_y), 
+                    font, 
+                    font_scale, 
+                    (255, 255, 255), 
+                    font_thickness
+                )
+            else:
+                # データがない場合は灰色
+                cell_y_start = i * cell_size
+                cell_x_start = j * cell_size
+                cv2.rectangle(
+                    output, 
+                    (cell_x_start, cell_y_start), 
+                    (cell_x_start + cell_size, cell_y_start + cell_size),
+                    (100, 100, 100), 
+                    -1
+                )
     
     # グリッド線を描画
-    for row in range(grid_rows + 1):
-        y = row * cell_h
-        cv2.line(grid_image, (0, y), (w, y), (100, 100, 100), 1)
-        
-    for col in range(grid_cols + 1):
-        x = col * cell_w
-        cv2.line(grid_image, (x, 0), (x, h), (100, 100, 100), 1)
+    for i in range(rows+1):
+        y = i * cell_size
+        cv2.line(output, (0, y), (output_w, y), (50, 50, 50), 1)
     
-    return grid_image
+    for j in range(cols+1):
+        x = j * cell_size
+        cv2.line(output, (x, 0), (x, output_h), (50, 50, 50), 1)
+    
+    return output
 
 # fast_camera_streaming.pyの最初の方で、一度だけテスト実行
 def test_visualization():

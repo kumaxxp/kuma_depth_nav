@@ -43,7 +43,7 @@ frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持す�
 depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
 depth_data_queue = queue.Queue(maxsize=1)  # 深度データキュー
 topview_image_queue = queue.Queue(maxsize=1)  # トップビュー画像キュー
-depth_grid_queue = queue.Queue(maxsize=1)  # 深度グリッド画像キュー
+depth_grid_image_queue = queue.Queue(maxsize=2)  # 深度グリッド用のキュー
 
 # axengine をインポート (機能チェック用)
 try:
@@ -483,10 +483,18 @@ def depth_processing_thread():
                     )
                     
                     # 占有グリッドを生成
-                    occupancy_grid = create_top_down_occupancy_grid(points)
-                    
-                    # トップビューを可視化
-                    topview = visualize_occupancy_grid(occupancy_grid)
+                    try:
+                        logger.debug(f"Generating occupancy grid from {len(points)} points")
+                        occupancy_grid = create_top_down_occupancy_grid(points)
+                        logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")
+                        
+                        # トップビューを可視化
+                        topview = visualize_occupancy_grid(occupancy_grid)
+                        logger.debug(f"Topview shape: {topview.shape}")
+                    except Exception as e:
+                        logger.error(f"Error in occupancy grid generation: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                     
                     # キューに追加（古いデータがあれば削除）
                     try:
@@ -501,6 +509,18 @@ def depth_processing_thread():
                         logger.warning(f"Failed to update topview queue: {e}")
                 except Exception as e:
                     logger.error(f"Failed to process point cloud: {e}")
+            
+            # 深度グリッドの生成を追加
+            depth_grid = create_depth_grid_visualization(
+                current_depth_map,
+                grid_size=(10, 10),  # 10x10のグリッド
+                max_distance=10.0     # 最大10メートル
+            )
+            
+            # 深度グリッドをキューに追加
+            if not depth_grid_image_queue.full():
+                depth_grid_image_queue.put_nowait(depth_grid)
+                logger.debug("Depth grid visualization added to queue")
             
             # 定期的にログ出力
             if frame_count % 30 == 0:
