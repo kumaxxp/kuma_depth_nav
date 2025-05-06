@@ -112,6 +112,29 @@ def load_config(config_path: str = "config.json") -> Dict[str, Any]:
         except Exception as e:
             print(f"設定ファイル読み込みエラー: {e}")
     
+    # 環境変数から上書き
+    # KUMA_CAMERA_DEVICE_INDEX, KUMA_DEPTH_USE_GPU など
+    for section in config:
+        for key in config[section]:
+            env_var = f"KUMA_{section.upper()}_{key.upper()}"
+            if env_var in os.environ:
+                env_value = os.environ[env_var]
+                # 型変換を試みる
+                if isinstance(config[section][key], bool):
+                    config[section][key] = env_value.lower() in ('true', 'yes', '1')
+                elif isinstance(config[section][key], int):
+                    try:
+                        config[section][key] = int(env_value)
+                    except ValueError:
+                        pass
+                elif isinstance(config[section][key], float):
+                    try:
+                        config[section][key] = float(env_value)
+                    except ValueError:
+                        pass
+                else:
+                    config[section][key] = env_value
+    
     return config
 
 def optimize_linux_performance():

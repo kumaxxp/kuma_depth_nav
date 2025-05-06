@@ -3,10 +3,10 @@ Description=KUMA Depth Navigation Camera Service
 After=network.target
 
 [Service]
-ExecStart=/bin/bash /path/to/kuma_depth_nav/run.sh
-WorkingDirectory=/path/to/kuma_depth_nav
-User=your-username
-Group=your-username
+ExecStart=/bin/bash /opt/kuma_depth_nav/run.sh
+WorkingDirectory=/opt/kuma_depth_nav
+User=root
+Group=root
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

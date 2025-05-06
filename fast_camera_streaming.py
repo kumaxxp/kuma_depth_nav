@@ -161,7 +161,7 @@ def get_video_stream():
     try:
         while True:
             if not camera.isOpened():
-                print("[WARN] Camera not open. Retrying...")
+                logger.warning("Camera not open. Retrying...")
                 camera.release()
                 time.sleep(0.5)
                 camera = initialize_camera()
@@ -195,42 +195,30 @@ def get_video_stream():
         camera.release()
 
 def get_depth_stream():
-    """深度画像ストリームを生成します"""
-    try:
-        # デフォルトの深度画像を準備
-        default_depth_image = create_default_depth_image(640, 480)
-        
-        # 最後に表示した有効な画像を保持
-        last_valid_depth_image = default_depth_image.copy()
-        
-        while True:
-            try:
-                # 深度画像があればそれを使用（キューから取り出さずに参照）
-                if not depth_image_queue.empty():
-                    current_depth_image = depth_image_queue.queue[0]  # キューから取り出さずに参照
-                    # 有効な画像なら最後の有効画像として保存
-                    if current_depth_image is not None and current_depth_image.shape[0] > 0:
-                        last_valid_depth_image = current_depth_image.copy()
+    """深度画像ストリーム生成関数"""
+    while True:
+        try:
+            # キューが空の場合はデフォルト深度画像を使用
+            if depth_image_queue.empty():
+                frame = create_default_depth_image()
+                logger.debug("Using default depth image")
+            else:
+                frame = depth_image_queue.get_nowait()
+            
+            # JPEG にエンコード
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if not ret:
+                continue
                 
-                # 前回の有効な深度画像を使用
-                depth_image = last_valid_depth_image
-                    
-                # JPEGエンコード
-                ret, buffer = cv2.imencode('.jpg', depth_image)
-                if not ret:
-                    print("[WARN] JPEG encode failed for depth image.")
-                    continue
+            # HTTP レスポンス形式に変換
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                   
+            time.sleep(0.05)  # ストリームのスロットリング
                 
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                time.sleep(0.05)  # 深度推論は低いフレームレートでOK
-                
-            except Exception as e:
-                print(f"[ERROR] Error in depth stream: {e}")
-                time.sleep(0.1)
-    
-    except Exception as e:
-        print(f"[ERROR] Fatal error in depth stream: {e}")
+        except Exception as e:
+            logger.error(f"Error in depth stream: {e}")
+            time.sleep(0.1)  # エラー時は少し長めのウェイト
 
 def get_topview_stream():
     """トップビュー画像ストリームを生成します"""
@@ -301,7 +289,18 @@ def depth_processing_thread():
             if depth_map is None or depth_map.size == 0:
                 logger.warning("Empty depth map received. Skipping...")
                 continue
-            
+            else:
+                # 深度マップの統計情報をログに出力
+                if frame_count % 20 == 0:  # 20フレームごとに出力
+                    valid_depths = depth_map[depth_map > 0.01]
+                    if len(valid_depths) > 0:
+                        min_val = valid_depths.min()
+                        max_val = valid_depths.max()
+                        mean_val = valid_depths.mean()
+                        logger.info(f"Depth stats - Min: {min_val:.4f}, Max: {max_val:.4f}, Mean: {mean_val:.4f}")
+                    else:
+                        logger.warning("No valid depth values found!")
+
             # オプション: 相対深度から絶対深度への変換
             # absolute_depth = convert_to_absolute_depth(depth_map, scaling_factor)
                 

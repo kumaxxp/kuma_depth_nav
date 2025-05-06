@@ -6,6 +6,10 @@ import cv2
 import numpy as np
 import time
 import os
+import logging
+
+# ロガーの取得
+logger = logging.getLogger("kuma_depth_nav.depth_model")
 
 # axengine をインポート
 try:
@@ -13,6 +17,7 @@ try:
     HAS_AXENGINE = True
 except ImportError:
     HAS_AXENGINE = False
+    logger.warning("axengine is not installed. Running in basic mode without depth estimation.")
 
 # デフォルトのモデルパス
 DEFAULT_MODEL_PATH = '/opt/m5stack/data/depth_anything/compiled.axmodel'
@@ -36,16 +41,16 @@ class DepthProcessor:
     def _initialize_model(self):
         """モデルを初期化"""
         if not HAS_AXENGINE:
-            print("[WARN] axengine not installed. Cannot initialize depth model.")
+            logger.warning("axengine not installed. Cannot initialize depth model.")
             return None
             
         try:
-            print(f"[INFO] Loading model from {self.model_path}")
+            logger.info(f"Loading model from {self.model_path}")
             session = axe.InferenceSession(self.model_path)
-            print("[INFO] Model loaded successfully")
+            logger.info("Model loaded successfully")
             return session
         except Exception as e:
-            print(f"[ERROR] Failed to initialize depth model: {e}")
+            logger.error(f"Failed to initialize depth model: {e}")
             return None
             
     def process_frame(self, frame, target_size=(384, 256)):
