@@ -184,8 +184,45 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
             (normalized * 255).astype(np.uint8), 
             cv2.COLORMAP_MAGMA
         )
+        
+        # 小さな8×6の画像から大きなグリッド表示を作成
+        output = np.zeros((rows * cell_size, cols * cell_size, 3), dtype=np.uint8)
+
+        # 各セルを描画
+        for i in range(rows):
+            for j in range(cols):
+                # セルの位置
+                y_start = i * cell_size
+                y_end = (i + 1) * cell_size
+                x_start = j * cell_size
+                x_end = (j + 1) * cell_size
+                
+                # セルの色を取得
+                cell_color = depth_colored[i, j]
+                
+                # セルを描画
+                output[y_start:y_end, x_start:x_end] = cell_color
+                
+                # セルに深度値を表示（絶対深度がある場合）
+                if absolute_depth is not None:
+                    # 深度値のテキスト
+                    depth_val = 15.0 / depth_conv[i, j]  # 相対深度から絶対深度に変換
+                    text = f"{depth_val:.1f}m"
                     
-        return depth_colored
+                    # テキスト表示
+                    cv2.putText(output, text, (x_start + 5, y_start + 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # グリッド線を描画
+        for i in range(rows+1):
+            y = i * cell_size
+            cv2.line(output, (0, y), (cols * cell_size, y), (50, 50, 50), 1)
+            
+        for j in range(cols+1):
+            x = j * cell_size
+            cv2.line(output, (x, 0), (x, rows * cell_size), (50, 50, 50), 1)
+
+        return output  # 拡大されたグリッド画像を返す
         
     except Exception as e:
         logger.error(f"Error in create_depth_visualization: {e}")
