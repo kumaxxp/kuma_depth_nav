@@ -15,6 +15,23 @@ from depth_processor import (
     depth_to_point_cloud, create_top_down_occupancy_grid, visualize_occupancy_grid
 )
 
+# ユーティリティのインポート
+from utils import load_config, setup_logger, optimize_linux_performance
+
+# 設定の読み込み
+config = load_config()
+camera_config = config["camera"]
+depth_config = config["depth"] 
+server_config = config["server"]
+logging_config = config["logging"]
+
+# ロガーの設定
+logger = setup_logger(
+    "kuma_depth_nav", 
+    logging_config.get("level", "INFO"),
+    logging_config.get("file")
+)
+
 # グローバル変数
 frame_queue = queue.Queue(maxsize=2)  # 最新のフレームだけを保持するキュー
 depth_image_queue = queue.Queue(maxsize=1)  # 深度画像キュー
@@ -26,10 +43,13 @@ depth_grid_queue = queue.Queue(maxsize=1)  # 深度グリッド画像キュー
 try:
     import axengine as axe
     HAS_AXENGINE = True
-    print("[INFO] axengine successfully imported")
+    logger.info("axengine successfully imported")
 except ImportError:
     HAS_AXENGINE = False
-    print("[WARN] axengine is not installed. Running in basic mode without depth estimation.")
+    logger.warning("axengine is not installed. Running in basic mode without depth estimation.")
+
+# Linux環境の最適化
+optimize_linux_performance()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,7 +59,7 @@ async def lifespan(app: FastAPI):
     # 起動時処理
     process_thread = threading.Thread(target=depth_processing_thread, daemon=True)
     process_thread.start()
-    print("[INFO] Started depth processing thread")
+    logger.info("Started depth processing thread")
     
     yield  # アプリケーション実行中
     
@@ -47,7 +67,7 @@ async def lifespan(app: FastAPI):
     is_running = False
     if process_thread:
         process_thread.join(timeout=2.0)
-    print("[INFO] Stopped depth processing thread")
+    logger.info("Stopped depth processing thread")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -251,7 +271,7 @@ def get_topview_stream():
 def depth_processing_thread():
     """深度推論を行うスレッド"""
     global is_running, depth_processor
-    print("[INFO] Depth processing thread started")
+    logger.info("Depth processing thread started")
     
     # 深度処理クラスの初期化
     depth_processor = DepthProcessor()
@@ -312,10 +332,10 @@ def depth_processing_thread():
             if frame_count % 5 == 0:
                 try:
                     # 深度マップから点群生成
-                    fx = 500  # カメラの焦点距離（推定値）
-                    fy = 500
-                    cx = depth_map.shape[2] / 2  # 画像の中心X
-                    cy = depth_map.shape[1] / 2  # 画像の中心Y
+                    fx = config["depth"].get("fx", 500)  
+                    fy = config["depth"].get("fy", 500)
+                    cx = config["depth"].get("cx", depth_map.shape[2] / 2)  
+                    cy = config["depth"].get("cy", depth_map.shape[1] / 2)
                     points = depth_to_point_cloud(depth_map, fx, fy, cx, cy)
                     
                     # 点群が生成できなかった場合はスキップ
@@ -438,7 +458,3 @@ async def depth_metrics():
         return metrics
     else:
         return {"error": "No depth data available"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8888)

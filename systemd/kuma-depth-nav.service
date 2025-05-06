@@ -1,0 +1,18 @@
+[Unit]
+Description=KUMA Depth Navigation Camera Service
+After=network.target
+
+[Service]
+ExecStart=/bin/bash /path/to/kuma_depth_nav/run.sh
+WorkingDirectory=/path/to/kuma_depth_nav
+User=your-username
+Group=your-username
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# 必要に応じて環境変数でconfig.jsonの設定を上書き可能
+#Environment=KUMA_CAMERA_DEVICE_INDEX=0
+#Environment=KUMA_DEPTH_USE_GPU=true
+
+[Install]
+WantedBy=multi-user.target

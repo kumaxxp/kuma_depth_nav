@@ -6,19 +6,29 @@
     "fps": 30,
     "use_v4l2": true
   },
-  
   "depth": {
     "model_type": "DINOv2",
     "width": 640,
     "height": 480,
     "use_gpu": true,
     "visualization_min": 0.1,
-    "visualization_max": 0.9
+    "visualization_max": 0.9,
+    "fx": 500,
+    "fy": 500
   },
-  
   "server": {
     "host": "0.0.0.0",
-    "port": 8000,
+    "port": 8888,
     "debug": false
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/kuma_depth_nav.log",
+    "rotation": "1 day"
+  },
+  "performance": {
+    "optimize_priority": true,
+    "optimize_cpu_governor": true,
+    "camera_buffer_size": 1
   }
 }
