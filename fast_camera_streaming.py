@@ -7,6 +7,7 @@ import threading
 import queue
 import os
 from contextlib import asynccontextmanager
+from fastapi.staticfiles import StaticFiles
 
 # カスタムモジュールのインポート
 from depth_processor import (
@@ -73,6 +74,32 @@ async def lifespan(app: FastAPI):
     logger.info("Stopped depth processing thread")
 
 app = FastAPI(lifespan=lifespan)
+
+# 静的ファイル配信の設定（app定義の直後に追加）
+import os
+from fastapi.staticfiles import StaticFiles
+
+# staticディレクトリがなければ作成
+if not os.path.exists("static"):
+    os.makedirs("static")
+    logger.info("Created static directory")
+
+# エラー画像の生成
+try:
+    error_img = np.zeros((256, 384, 3), dtype=np.uint8)
+    error_img[:, :] = [0, 0, 150]  # 赤い背景
+    cv2.putText(error_img, "ERROR", (120, 128), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
+    cv2.imwrite("static/error.jpg", error_img)
+    logger.info("Created error image")
+except Exception as e:
+    logger.error(f"Failed to create error image: {e}")
+
+# 静的ファイル配信を設定
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    logger.info("Static files directory mounted")
+except Exception as e:
+    logger.error(f"Failed to mount static files: {e}")
 
 # グローバル変数
 process_thread = None
