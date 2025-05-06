@@ -118,7 +118,7 @@ def depth_to_color(depth_normalized):
 
 def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8, 8), max_distance=10.0, cell_size=60):
     """
-    深度マップをグリッド形式で可視化
+    深度マップをグリッド形式で可視化（深度マップと同じカラーマップを使用）
     
     Args:
         depth_map: 深度マップ（相対深度）
@@ -130,9 +130,6 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
     Returns:
         numpy.ndarray: グリッド可視化画像
     """
-    import cv2
-    import numpy as np
-    
     rows, cols = grid_size
     h, w = depth_map.shape[:2] if len(depth_map.shape) > 2 else depth_map.shape
     
@@ -195,18 +192,14 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
                 else:
                     avg_depth = np.mean(sorted_depths)
                 
-                # 深度に応じた色を設定
+                # 深度に応じた色を設定（深度マップと同じMAGMAカラーマップを使用）
                 norm_depth = min(avg_depth / max_distance, 1.0)
                 
-                # HSV色空間で色を生成（近いほど赤、遠いほど青）
-                hue = int(120 - 120 * norm_depth)  # 0(赤)〜120(青)
-                sat = 240
-                val = 220
-                
-                # HSV -> BGR変換
-                hsv_color = np.array([[[hue, sat, val]]], dtype=np.uint8)
-                bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0][0]
-                color = (int(bgr_color[0]), int(bgr_color[1]), int(bgr_color[2]))
+                # MAGMA カラーマップを適用（深度マップと同じ）
+                # 0-255の範囲に変換して、MAGMAカラーマップを適用
+                depth_as_uint8 = np.array([(1.0 - norm_depth) * 255], dtype=np.uint8)
+                color_pixel = cv2.applyColorMap(depth_as_uint8, cv2.COLORMAP_MAGMA)[0][0]
+                color = (int(color_pixel[0]), int(color_pixel[1]), int(color_pixel[2]))
                 
                 # セルを描画
                 cv2.rectangle(
@@ -279,4 +272,22 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
         x = j * cell_size
         cv2.line(output, (x, 0), (x, output_h), (50, 50, 50), 1)
     
-    return output
+    # カラーバーを追加（オプション）
+    colorbar_height = 20
+    colorbar_width = output_w
+    colorbar = np.zeros((colorbar_height, colorbar_width, 3), dtype=np.uint8)
+    
+    for x in range(colorbar_width):
+        normalized_value = x / colorbar_width
+        color_value = np.array([int((1 - normalized_value) * 255)], dtype=np.uint8)
+        color_pixel = cv2.applyColorMap(color_value, cv2.COLORMAP_MAGMA)[0][0]
+        colorbar[:, x] = color_pixel
+    
+    # カラーバーラベルを追加
+    cv2.putText(colorbar, "近い", (10, 15), font, 0.5, (255, 255, 255), 1)
+    cv2.putText(colorbar, f"{max_distance}m", (colorbar_width - 50, 15), font, 0.5, (255, 255, 255), 1)
+    
+    # カラーバーを出力画像に結合
+    output_with_colorbar = np.vstack([output, colorbar])
+    
+    return output_with_colorbar
