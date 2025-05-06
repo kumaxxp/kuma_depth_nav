@@ -144,9 +144,8 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
         # NaNやInfをチェックして置換
         depth_feature = np.nan_to_num(depth_feature, nan=0.5, posinf=1.0, neginf=0.01)
 
-        # grid_sizeにdepth_featureを分割
-        grid_depth = np.zeros((rows, cols), dtype=np.float32)
-        grid_depth_resized = np.zeros((rows * cell_size, cols * cell_size), dtype=np.float32)
+        # depth_featureをgrid_sizeのサイズに畳み込んだdepth_convを作成
+        depth_conv = np.zeros((rows, cols), dtype=np.float32)
         for i in range(rows):
             for j in range(cols):
                 # 各グリッドの範囲を計算
@@ -156,10 +155,11 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
                 col_end = int((j + 1) * depth_feature.shape[1] / cols)
 
                 # グリッド内の深度値を平均化
-                grid_depth[i, j] = np.mean(depth_feature[row_start:row_end, col_start:col_end])
+                depth_conv[i, j] = np.mean(depth_feature[row_start:row_end, col_start:col_end])
 
-        # grid_depthを正規化（無効値を除外）
-        valid_depth = grid_depth[grid_depth > 0.01]
+
+        # depth_convを正規化（無効値を除外）
+        valid_depth = depth_conv[depth_conv > 0.01]
         if len(valid_depth) > 0:
             min_depth = np.percentile(valid_depth, 5)  # 外れ値を除外
             max_depth = np.percentile(valid_depth, 95) # 外れ値を除外
@@ -170,11 +170,11 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(8
         logger.debug(f"Using depth range for normalization: {min_depth:.4f} to {max_depth:.4f}")
 
         # 正規化して0-1範囲にする
-        normalized = np.zeros_like(grid_depth, dtype=np.float32)
-        valid_mask = grid_depth > 0.01
+        normalized = np.zeros_like(depth_conv, dtype=np.float32)
+        valid_mask = depth_conv > 0.01
         if np.any(valid_mask) and (max_depth > min_depth):
             normalized[valid_mask] = np.clip(
-                (grid_depth[valid_mask] - min_depth) / (max_depth - min_depth + 1e-6), 
+                (depth_conv[valid_mask] - min_depth) / (max_depth - min_depth + 1e-6), 
                 0, 1
             )
                     
