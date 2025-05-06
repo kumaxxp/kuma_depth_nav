@@ -122,7 +122,7 @@ def visualize_occupancy_grid(occupancy_grid):
     """
     占有グリッドを視覚化する関数
     Args:
-        occupancy_grid: 占有グリッド（0=空き、255=占有）
+        occupancy_grid: 占有グリッド（0=不明、1=障害物、2=通行可能）
     Returns:
         可視化された画像
     """
@@ -132,14 +132,14 @@ def visualize_occupancy_grid(occupancy_grid):
     # 表示用のキャンバスを作成（RGB）
     visualization = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
     
-    # 障害物（値が255のセル）は赤色で表示
-    visualization[occupancy_grid == 255] = [0, 0, 255]  # 赤色
+    # 障害物（値が1のセル）は赤色で表示
+    visualization[occupancy_grid == 1] = [0, 0, 255]  # 赤色
     
-    # 通行可能（値が0のセル）は緑色で表示
-    visualization[occupancy_grid == 0] = [0, 50, 0]  # 暗い緑色
+    # 通行可能（値が2のセル）は緑色で表示
+    visualization[occupancy_grid == 2] = [0, 100, 0]  # 緑色
     
-    # 未知領域（値が128のセル）はグレーで表示
-    visualization[occupancy_grid == 128] = [128, 128, 128]  # グレー
+    # 不明領域（値が0のセル）はグレーで表示
+    visualization[occupancy_grid == 0] = [80, 80, 80]  # グレー
     
     # 中央に車両位置を示す点を描画
     center_x, center_y = grid_w // 2, grid_h - 20

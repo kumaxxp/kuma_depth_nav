@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
+import io  # <- これを追加
 import cv2
 import numpy as np
 import time
@@ -367,66 +368,53 @@ def get_depth_stream():
 
 def get_topview_stream():
     """トップビュー画像ストリームを生成します"""
-    try:
-        # デフォルトのトップビュー画像（空の占有グリッド）を準備
-        default_grid = np.zeros((200, 200), dtype=np.uint8)  # 空の占有グリッド
-        
-        # テスト用のパターンを作成（中央に円と十字線）
-        cv2.circle(default_grid, (100, 100), 30, 255, -1)  # 中央に円
-        cv2.line(default_grid, (0, 100), (200, 100), 128, 2)  # 水平線
-        cv2.line(default_grid, (100, 0), (100, 200), 128, 2)  # 垂直線
-        
-        # 占有グリッドを可視化
-        default_topview = visualize_occupancy_grid(default_grid)
-        
-        # テスト用のテキストを追加
-        cv2.putText(default_topview, "Test Pattern", (20, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        logger.info(f"Created test topview with shape: {default_topview.shape}")
-        
-        # 最後に表示した有効な画像を保持
-        last_valid_topview = default_topview.copy()
-        frame_count = 0
-        
-        while True:
-            try:
-                frame_count += 1
-                
-                # 5フレームごとにキューから取り出す（更新を強制）
-                if frame_count % 5 == 0 and not topview_image_queue.empty():
-                    current_topview = topview_image_queue.get_nowait()  # キューから取り出す
-                    logger.debug("Retrieved new topview from queue")
-                # 通常フレームでは参照のみ
-                elif not topview_image_queue.empty():
-                    current_topview = topview_image_queue.queue[0]  # 参照のみ
-                else:
-                    current_topview = None
-                
-                # 有効な画像なら最後の有効画像として保存
-                if current_topview is not None and current_topview.shape[0] > 0:
-                    last_valid_topview = current_topview.copy()
-                
-                # 前回の有効なトップビュー画像を使用
-                topview_image = last_valid_topview
-                     
-                # JPEGエンコード
-                ret, buffer = cv2.imencode('.jpg', topview_image)
-                if not ret:
-                    logger.warning("JPEG encode failed for topview image.")
-                    continue
-                
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                time.sleep(0.1)  # 更新間隔を0.05から0.1に延長
-                
-            except Exception as e:
-                logger.error(f"Error in topview stream: {e}")  # printからloggerに変更
-                time.sleep(0.1)
+    # テスト用のデフォルト画像（明確に認識できるパターン）
+    default_image = np.zeros((200, 200, 3), dtype=np.uint8)
+    # グレーの背景
+    default_image[:, :] = [50, 50, 50]
+    # 格子パターン
+    for i in range(0, 200, 20):
+        cv2.line(default_image, (0, i), (200, i), [100, 100, 100], 1)
+        cv2.line(default_image, (i, 0), (i, 200), [100, 100, 100], 1)
+    # メッセージを追加
+    cv2.putText(default_image, "Waiting for data...", (30, 100), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, [200, 200, 200], 1)
     
-    except Exception as e:
-        logger.error(f"Fatal error in topview stream: {e}")  # printからloggerに変更
-
+    last_valid_topview = default_image.copy()  # 最初のデフォルト画像を保存
+    
+    while True:
+        try:
+            if not topview_image_queue.empty():
+                try:
+                    # キューから画像を取得
+                    topview = topview_image_queue.get(timeout=0.1)
+                    last_valid_topview = topview.copy()
+                    logger.debug(f"Got topview from queue: shape={topview.shape}")
+                except Exception as e:
+                    logger.warning(f"Failed to get topview from queue: {e}")
+                    # エラー発生時は前回の有効画像を使用
+                    topview = last_valid_topview
+            else:
+                # キューが空の場合は前回の有効な画像を使用
+                topview = last_valid_topview
+                
+            # JEPGエンコード
+            ret, buffer = cv2.imencode('.jpg', topview)
+            if not ret:
+                logger.warning("JPEG encode failed for topview.")
+                continue
+            
+            # フレームを返す
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
+            # 更新間隔を調整（0.1秒 = 10FPS）
+            time.sleep(0.1)
+            
+        except Exception as e:
+            logger.error(f"Error in topview stream: {e}")
+            time.sleep(0.1)
+    
 def depth_processing_thread():
     """深度推論を行うスレッド"""
     global is_running, depth_processor
@@ -614,12 +602,19 @@ def depth_processing_thread():
                     logger.debug("Creating occupancy grid")
                     occupancy_grid = create_top_down_occupancy_grid(
                         point_cloud,
-                        grid_resolution=0.05,  # 5cm解像度
-                        grid_width=200,        # グリッド幅（セル数）
-                        grid_height=200,       # グリッド高さ（セル数）
-                        height_threshold=0.5   # 高さ閾値
+                        grid_resolution=0.05,
+                        grid_width=200,
+                        grid_height=200,
+                        height_threshold=0.5
                     )
-                    logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")
+                    
+                    # デバッグ: グリッドの値の分布をログ出力
+                    if occupancy_grid is not None:
+                        logger.debug(f"Occupancy grid shape: {occupancy_grid.shape}")
+                        values, counts = np.unique(occupancy_grid, return_counts=True)
+                        logger.debug(f"Occupancy grid values: {values}, counts: {counts}")
+                    else:
+                        logger.warning("Occupancy grid is None")
                     
                     # 占有グリッドを可視化
                     logger.debug("Visualizing occupancy grid")
@@ -805,6 +800,48 @@ async def test_topview_endpoint():
         return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpeg")
     except Exception as e:
         logger.error(f"Test topview error: {e}")
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+@app.get("/test_grid")
+async def test_grid_endpoint():
+    """テスト用のグリッドパターンを生成するエンドポイント"""
+    try:
+        # テスト用のグリッドを作成（異なるパターン）
+        test_grid = np.zeros((200, 200), dtype=np.uint8)
+        
+        # 1と2の市松模様パターン
+        for i in range(20):
+            for j in range(20):
+                if (i + j) % 2 == 0:
+                    test_grid[i*10:(i+1)*10, j*10:(j+1)*10] = 1  # 障害物
+                else:
+                    test_grid[i*10:(i+1)*10, j*10:(j+1)*10] = 2  # 通行可能
+        
+        # 中央に円形の通行可能領域
+        center_x, center_y = 100, 100
+        for i in range(200):
+            for j in range(200):
+                dist = np.sqrt((i - center_y)**2 + (j - center_x)**2)
+                if dist < 50:
+                    test_grid[i, j] = 2  # 通行可能な円
+        
+        # 可視化
+        test_image = visualize_occupancy_grid(test_grid)
+        
+        # キューに画像を追加
+        if topview_image_queue.full():
+            topview_image_queue.get_nowait()
+        topview_image_queue.put_nowait(test_image)
+        
+        # 画像をエンコード
+        ret, buffer = cv2.imencode('.jpg', test_image)
+        
+        # 画像を直接返す
+        return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpeg")
+        
+    except Exception as e:
+        logger.error(f"Error in test grid: {e}")
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
 
