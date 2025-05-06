@@ -24,4 +24,4 @@ fi
 
 # Python実行
 echo "プログラムを起動中..."
-exec python fast_camera_streaming.py "$@"
+exec python3 fast_camera_streaming.py "$@"
