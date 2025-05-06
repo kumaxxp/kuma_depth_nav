@@ -458,7 +458,7 @@ def depth_processing_thread():
             
             # 深度マップから絶対深度に変換
             absolute_depth = convert_to_absolute_depth(
-                depth_map, 
+                current_depth_map, 
                 scaling_factor=depth_config.get("scaling_factor", 15.0)
             )
 
@@ -486,14 +486,13 @@ def depth_processing_thread():
                     logger.error(f"Failed to process point cloud: {e}")
             
             # 定期的にログ出力
-            frame_count += 1
             if frame_count % 30 == 0:
                 logger.info(f"Processed {frame_count} depth frames, inference time: {inference_time:.3f}s")
                 
             # 100フレームごとにデバッグ画像を保存
             if frame_count % 100 == 0:
                 try:
-                    debug_vis = create_depth_visualization(depth_map, frame.shape)
+                    debug_vis = create_depth_visualization(current_depth_map, frame.shape)
                     cv2.imwrite(f"depth_frame_{frame_count}.jpg", debug_vis)
                 except Exception:
                     pass
