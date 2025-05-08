@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
 # カメラキャリブレーションクラスをインポート
-from camera_calibration import CameraCalibration
+from calibration.camera_calibration import CameraCalibration
 
 # FastAPIアプリケーションのライフスパン管理
 @asynccontextmanager

@@ -6,8 +6,6 @@ m5stack LLMはLinuxモジュールですので、本システムはLinuxのみ�
 
 ## ファイル構成
 
-```
-
 kuma_depth_nav/
 ├── config.json                 # 設定ファイル
 ├── fast_camera_streaming.py    # メインアプリケーション
@@ -27,6 +25,44 @@ kuma_depth_nav/
     └── kuma-depth-nav.service
 
 ```
+```
+kuma_depth_nav/
+├── config.json                 # 設定ファイル
+├── fast_camera_streaming.py    # メインアプリケーション
+├── utils.py                    # ユーティリティ関数（ロギング、設定読み込み）
+├── linux_optimization.py       # Linuxシステム最適化機能
+├── depth_processor/
+│   ├── __init__.py
+│   ├── depth_model.py          # 深度推定モデル関連
+│   ├── point_cloud.py          # 点群処理関連
+│   └── visualization.py        # 可視化関連
+├── calibration/
+│   ├── camera_calibration.py   # キャリブレーション用ライブラリ
+│   ├── calibration_app.py      # キャリブレーション実行アプリ
+│   ├── run_calibration.sh      # 実行用シェルスクリプト
+│   └── __init__.py
+├── calibration_images/         # キャリブレーション画像（jpg等）を配置
+├── calibration_data/           # キャリブレーション結果保存先
+├── run.sh                      # 起動スクリプト
+├── tests/                      # テストコード（オプショナル）
+│   └── test_depth_processor.py
+├── logs/                       # ログ出力ディレクトリ
+│   └── .gitkeep
+└── systemd/                    # systemdサービス設定
+    └── kuma-depth-nav.service
+```
+
+## キャリブレーションの実行方法
+
+1. `calibration_images/` ディレクトリにキャリブレーション画像（jpg等）を配置してください。
+2. 以下のコマンドでキャリブレーションを実行します（Linux/Macの場合）:
+
+```sh
+cd calibration
+sh run_calibration.sh
+```
+
+Windowsの場合は、`python calibration/calibration_app.py` を実行してください。
 
 1. depth_processor/point_cloud.py (新規)
 点群処理と占有グリッド生成に関連する関数を実装します。主な関数は：

@@ -1,4 +1,30 @@
-from calibration.camera_calibration import *
+import cv2
+import numpy as np
+import os
+import pickle
+import json
+import time
+from typing import Tuple, List, Dict, Any, Optional
+
+class CameraCalibration:
+    """カメラキャリブレーション処理を管理するクラス"""
+    
+    def __init__(self, chessboard_size=(11, 8), square_size_mm=23.0):
+        """カメラキャリブレーションクラスを初期化します
+
+        Args:
+            chessboard_size: チェスボードのコーナー数 (width, height)
+            square_size_mm: チェスボードの正方形一辺のサイズ (mm単位)
+        """
+        self.chessboard_size = chessboard_size
+        self.square_size_mm = square_size_mm
+        
+        # キャリブレーション結果
+        self.camera_matrix = None
+        self.dist_coeffs = None
+        self.rvecs = None
+        self.tvecs = None
+        self.rms_error = None
         self.frame_size = None
         
         # コーナー検出のための終了条件
