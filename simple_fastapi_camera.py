@@ -5,36 +5,31 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 
 app = FastAPI()
 
+cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+
 def get_camera_stream():
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.1)
-                continue
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if not ret:
-                continue
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.03)  # 約30FPS
-    finally:
-        cap.release()
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            time.sleep(0.01)
+            continue
+        ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            continue
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        time.sleep(0.01)  # FPS向上
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return """
     <html>
-    <head>
-        <title>Fast Camera Streaming</title>
-    </head>
+    <head><title>Fast Camera Streaming</title></head>
     <body>
         <h2>Camera Stream</h2>
-        <img src="/video" width="320" height="240" />
+        <img src="/video" />
     </body>
     </html>
     """
