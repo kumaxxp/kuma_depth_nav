@@ -19,15 +19,21 @@ def get_depth_stream():
     while True:
         ret, frame = cap.read()
         if not ret:
-            time.sleep(0.01)
+            time.sleep(0.001)
             continue
-        depth_map, _ = depth_processor.predict(frame)
-        vis = create_depth_visualization(depth_map, frame.shape)
-        ret, buffer = cv2.imencode('.jpg', vis)
+        # 推論用にリサイズ（高速化）
+        small = cv2.resize(frame, (224, 224))
+        depth_map, _ = depth_processor.predict(small)
+        vis = create_depth_visualization(depth_map, small.shape)
+        # 表示用に拡大
+        vis = cv2.resize(vis, (320, 240))
+        # JPEG品質を下げて高速化
+        ret, buffer = cv2.imencode('.jpg', vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ret:
             continue
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.01)
+        # sleepを最小限に
+        time.sleep(0.001)
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -47,13 +53,13 @@ def get_camera_stream():
     while True:
         ret, frame = cap.read()
         if not ret:
-            time.sleep(0.01)
+            time.sleep(0.001)
             continue
-        ret, buffer = cv2.imencode('.jpg', frame)
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ret:
             continue
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.01)
+        time.sleep(0.001)
 
 @app.get("/video")
 async def video():
