@@ -9,7 +9,7 @@ from typing import Tuple, List, Dict, Any, Optional
 class CameraCalibration:
     """カメラキャリブレーション処理を管理するクラス"""
     
-    def __init__(self, chessboard_size=(11, 8), square_size_mm=23.0):
+    def __init__(self, chessboard_size=(10, 7), square_size_mm=23.0):
         """カメラキャリブレーションクラスを初期化します
 
         Args:

@@ -2,4 +2,4 @@
 # キャリブレーション実行用シェルスクリプト
 
 cd "$(dirname "$0")"
-python calibration_app.py
+python3 calibration_app.py
