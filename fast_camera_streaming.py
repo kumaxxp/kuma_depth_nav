@@ -368,53 +368,48 @@ def get_depth_stream():
 
 def get_topview_stream():
     """トップビュー画像ストリームを生成します"""
-    # テスト用のデフォルト画像（明確に認識できるパターン）
+    # デフォルト画像（明確なパターン）
     default_image = np.zeros((200, 200, 3), dtype=np.uint8)
-    # グレーの背景
     default_image[:, :] = [50, 50, 50]
-    # 格子パターン
     for i in range(0, 200, 20):
         cv2.line(default_image, (0, i), (200, i), [100, 100, 100], 1)
         cv2.line(default_image, (i, 0), (i, 200), [100, 100, 100], 1)
-    # メッセージを追加
     cv2.putText(default_image, "Waiting for data...", (30, 100), 
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, [200, 200, 200], 1)
-    
-    last_valid_topview = default_image.copy()  # 最初のデフォルト画像を保存
-    
+    last_valid_topview = default_image.copy()
+
     while True:
         try:
+            # キューが空の場合はデフォルト画像
             if not topview_image_queue.empty():
                 try:
-                    # キューから画像を取得
                     topview = topview_image_queue.get(timeout=0.1)
-                    last_valid_topview = topview.copy()
-                    logger.debug(f"Got topview from queue: shape={topview.shape}")
+                    if topview is not None and topview.shape[0] > 0:
+                        last_valid_topview = topview.copy()
+                        logger.debug(f"Got topview from queue: shape={topview.shape}")
+                    else:
+                        logger.warning("Topview from queue is invalid, using last valid.")
+                        topview = last_valid_topview
                 except Exception as e:
                     logger.warning(f"Failed to get topview from queue: {e}")
-                    # エラー発生時は前回の有効画像を使用
                     topview = last_valid_topview
             else:
-                # キューが空の場合は前回の有効な画像を使用
+                logger.debug("Topview queue empty, using last valid or default.")
                 topview = last_valid_topview
-                
-            # JEPGエンコード
+
+            # JPEGエンコード
             ret, buffer = cv2.imencode('.jpg', topview)
             if not ret:
                 logger.warning("JPEG encode failed for topview.")
                 continue
-            
-            # フレームを返す
+
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            
-            # 更新間隔を調整（0.1秒 = 10FPS）
             time.sleep(0.1)
-            
         except Exception as e:
             logger.error(f"Error in topview stream: {e}")
             time.sleep(0.1)
-    
+
 def depth_processing_thread():
     """深度推論を行うスレッド"""
     global is_running, depth_processor
@@ -638,16 +633,26 @@ def depth_processing_thread():
                     
                     # トップビューをキューに追加
                     try:
-                        if topview_image_queue.full():
-                            topview_image_queue.get_nowait()  # 古いデータを削除
-                        topview_image_queue.put_nowait(topview_image)
-                        logger.debug("Topview visualization added to queue")
+                        if topview_image is not None and topview_image.shape[0] > 0:
+                            if topview_image_queue.full():
+                                topview_image_queue.get_nowait()
+                            topview_image_queue.put_nowait(topview_image)
+                            logger.debug("Topview visualization added to queue")
+                        else:
+                            logger.warning("Topview image is invalid, putting default image to queue")
+                            if topview_image_queue.full():
+                                topview_image_queue.get_nowait()
+                            topview_image_queue.put_nowait(np.zeros((200, 200, 3), dtype=np.uint8))
                     except Exception as e:
                         logger.warning(f"Failed to update topview queue: {e}")
                 except Exception as e:
                     logger.error(f"Failed to create topview: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
+                    # 失敗時はデフォルト画像をキューに追加
+                    if topview_image_queue.full():
+                        topview_image_queue.get_nowait()
+                    topview_image_queue.put_nowait(np.zeros((200, 200, 3), dtype=np.uint8))
             
             # 定期的にログ出力
             if frame_count % 30 == 0:
