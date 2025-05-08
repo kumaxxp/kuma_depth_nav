@@ -1,5 +1,6 @@
 import cv2
 import time
+import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 
@@ -57,9 +58,14 @@ def get_depth_grid_stream():
         small = cv2.resize(frame, (224, 224))
         depth_map, _ = depth_processor.predict(small)
         grid_img = create_depth_grid_visualization(depth_map, grid_size=(12, 16), cell_size=18)
+        # グリッド画像がNoneやshape不正ならダミー画像
+        if grid_img is None or len(grid_img.shape) < 2:
+            grid_img = 128 * np.ones((240, 320, 3), dtype=np.uint8)
+        # 1チャネルならBGR化
+        elif len(grid_img.shape) == 2 or (len(grid_img.shape) == 3 and grid_img.shape[2] == 1):
+            grid_img = cv2.cvtColor(grid_img, cv2.COLOR_GRAY2BGR)
         # 表示用に拡大
         grid_img = cv2.resize(grid_img, (320, 240))
-        # JPEG品質を下げて高速化
         ret, buffer = cv2.imencode('.jpg', grid_img, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ret:
             continue
