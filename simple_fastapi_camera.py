@@ -34,7 +34,7 @@ async def index():
     </head>
     <body>
         <h2>Camera Stream</h2>
-        <img src="/video" width="640" height="480" />
+        <img src="/video" width="320" height="240" />
     </body>
     </html>
     """
