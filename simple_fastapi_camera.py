@@ -279,26 +279,121 @@ async def index():
         <style>
             body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
             .container { display: flex; flex-wrap: wrap; gap: 15px; }
-            .video-box { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+            .video-box { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; }
             h2 { margin-top: 0; color: #333; }
             .stats { margin-top: 20px; padding: 10px; background: #e8f5e9; border-radius: 5px; }
             #stats-container { font-family: monospace; }
+            .switch-container { margin-top: 10px; display: flex; align-items: center; }
+            .switch {
+                position: relative;
+                display: inline-block;
+                width: 48px;
+                height: 24px;
+                margin-right: 10px;
+            }
+            .switch input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .slider {
+                position: absolute;
+                cursor: pointer;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background-color: #ccc;
+                transition: .4s;
+                border-radius: 24px;
+            }
+            .slider:before {
+                position: absolute;
+                content: "";
+                height: 16px;
+                width: 16px;
+                left: 4px;
+                bottom: 4px;
+                background-color: white;
+                transition: .4s;
+                border-radius: 50%;
+            }
+            input:checked + .slider {
+                background-color: #4CAF50;
+            }
+            input:checked + .slider:before {
+                transform: translateX(24px);
+            }
+            .stream-img {
+                max-width: 100%;
+                height: auto;
+                transition: opacity 0.3s;
+            }
+            .control-panel {
+                background: white;
+                padding: 15px;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                margin-bottom: 15px;
+            }
+            .control-title {
+                margin-top: 0;
+                font-size: 1.2em;
+                color: #333;
+            }
+            .cpu-usage {
+                background: #e3f2fd;
+                padding: 10px;
+                border-radius: 4px;
+                margin-top: 10px;
+            }
         </style>
     </head>
     <body>
         <h1>Fast Depth Processing System</h1>
+        
+        <div class="control-panel">
+            <h3 class="control-title">表示設定</h3>
+            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                <div class="switch-container">
+                    <label class="switch">
+                        <input type="checkbox" id="camera-toggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <label for="camera-toggle">カメラ</label>
+                </div>
+                <div class="switch-container">
+                    <label class="switch">
+                        <input type="checkbox" id="depth-toggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <label for="depth-toggle">深度マップ</label>
+                </div>
+                <div class="switch-container">
+                    <label class="switch">
+                        <input type="checkbox" id="grid-toggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <label for="grid-toggle">グリッド</label>
+                </div>
+            </div>
+            <div class="cpu-usage">
+                <strong>CPU/GPU 使用率を調整:</strong> 表示を無効にすることで処理負荷を軽減します
+            </div>
+        </div>
+        
         <div class="container">
-            <div class="video-box">
+            <div class="video-box" id="camera-box">
                 <h2>Camera Stream</h2>
-                <img src="/video" alt="Camera Stream" />
+                <img src="/video" alt="Camera Stream" class="stream-img" id="camera-stream" />
             </div>
-            <div class="video-box">
+            <div class="video-box" id="depth-box">
                 <h2>Depth Map</h2>
-                <img src="/depth_video" alt="Depth Map" />
+                <img src="/depth_video" alt="Depth Map" class="stream-img" id="depth-stream" />
             </div>
-            <div class="video-box">
+            <div class="video-box" id="grid-box">
                 <h2>Depth Grid</h2>
-                <img src="/depth_grid" alt="Depth Grid" />
+                <img src="/depth_grid" alt="Depth Grid" class="stream-img" id="grid-stream" />
             </div>
         </div>
         <div class="stats">
@@ -307,7 +402,41 @@ async def index():
         </div>
         
         <script>
-            // 2秒ごとに統計情報を更新（より頻繁に更新）
+            // ストリーム表示の切り替え
+            document.getElementById('camera-toggle').addEventListener('change', function(e) {
+                const stream = document.getElementById('camera-stream');
+                if (this.checked) {
+                    stream.src = "/video"; // ストリームを開始
+                    stream.style.opacity = '1';
+                } else {
+                    stream.src = ""; // ストリームを停止
+                    stream.style.opacity = '0.3';
+                }
+            });
+            
+            document.getElementById('depth-toggle').addEventListener('change', function(e) {
+                const stream = document.getElementById('depth-stream');
+                if (this.checked) {
+                    stream.src = "/depth_video"; // ストリームを開始
+                    stream.style.opacity = '1';
+                } else {
+                    stream.src = ""; // ストリームを停止
+                    stream.style.opacity = '0.3';
+                }
+            });
+            
+            document.getElementById('grid-toggle').addEventListener('change', function(e) {
+                const stream = document.getElementById('grid-stream');
+                if (this.checked) {
+                    stream.src = "/depth_grid"; // ストリームを開始
+                    stream.style.opacity = '1';
+                } else {
+                    stream.src = ""; // ストリームを停止
+                    stream.style.opacity = '0.3';
+                }
+            });
+            
+            // 2秒ごとに統計情報を更新
             setInterval(async () => {
                 try {
                     const response = await fetch('/stats');
@@ -328,7 +457,7 @@ async def index():
                 } catch (e) {
                     console.error('Failed to fetch stats:', e);
                 }
-            }, 2000); // 5秒→2秒に短縮
+            }, 2000);
         </script>
     </body>
     </html>
@@ -378,6 +507,8 @@ def get_camera_stream():
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         time.sleep(0.05)  # 20FPSに制限（0.02→0.05に変更）
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8888)
+# サーバー停止時にカメラをきれいに解放するための処理を追加
+@app.on_event("shutdown")
+async def shutdown_event():
+    cap.release()
+    print("カメラリソースを解放しました")
