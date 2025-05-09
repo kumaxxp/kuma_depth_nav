@@ -1,6 +1,7 @@
 import cv2
 import time
 import numpy as np
+import threading
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 from collections import deque
@@ -42,7 +43,6 @@ def log_processing_times():
         if encoding_times:
             print(f"[Encoding] Avg: {np.mean(encoding_times):.4f}s, Max: {np.max(encoding_times):.4f}s, Min: {np.min(encoding_times):.4f}s")
 
-import threading
 threading.Thread(target=log_processing_times, daemon=True).start()
 
 # 推論専用の関数を追加
