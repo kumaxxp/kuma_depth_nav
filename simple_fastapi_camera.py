@@ -428,7 +428,8 @@ async def index():
             document.getElementById('camera-toggle').addEventListener('change', function(e) {
                 const stream = document.getElementById('camera-stream');
                 if (this.checked) {
-                    stream.src = "/video"; // ストリームを開始
+                    // FPSリセット用のクエリパラメータを追加（キャッシュ防止と再初期化）
+                    stream.src = "/video?t=" + new Date().getTime(); // ストリームを開始
                     stream.style.opacity = '1';
                 } else {
                     stream.src = ""; // ストリームを停止
@@ -439,7 +440,8 @@ async def index():
             document.getElementById('depth-toggle').addEventListener('change', function(e) {
                 const stream = document.getElementById('depth-stream');
                 if (this.checked) {
-                    stream.src = "/depth_video"; // ストリームを開始
+                    // FPSリセット用のクエリパラメータを追加
+                    stream.src = "/depth_video?t=" + new Date().getTime(); // ストリームを開始
                     stream.style.opacity = '1';
                 } else {
                     stream.src = ""; // ストリームを停止
@@ -450,7 +452,8 @@ async def index():
             document.getElementById('grid-toggle').addEventListener('change', function(e) {
                 const stream = document.getElementById('grid-stream');
                 if (this.checked) {
-                    stream.src = "/depth_grid"; // ストリームを開始
+                    // FPSリセット用のクエリパラメータを追加
+                    stream.src = "/depth_grid?t=" + new Date().getTime(); // ストリームを開始
                     stream.style.opacity = '1';
                 } else {
                     stream.src = ""; // ストリームを停止
@@ -487,14 +490,26 @@ async def index():
 
 @app.get("/video")
 async def video():
+    # リクエスト時点でFPSの計算をリセット
+    last_frame_times["camera"] = 0
+    # カメラフレームの統計をクリア
+    fps_stats["camera"].clear()
     return StreamingResponse(get_camera_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/depth_video")
 async def depth_video():
+    # リクエスト時点でFPSの計算をリセット
+    last_frame_times["depth"] = 0
+    # 深度のFPS統計をクリア
+    fps_stats["depth"].clear()
     return StreamingResponse(get_depth_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/depth_grid")
 async def depth_grid():
+    # リクエスト時点でFPSの計算をリセット
+    last_frame_times["grid"] = 0
+    # グリッドのFPS統計をクリア
+    fps_stats["grid"].clear()
     return StreamingResponse(get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 def get_camera_stream():
@@ -506,11 +521,13 @@ def get_camera_stream():
                 continue
             frame = latest_camera_frame.copy()
         
-        # FPS計算
+        # FPS計算 - 初回または長時間間隔があった場合は計算をスキップ
         now = time.time()
-        if last_frame_times["camera"] > 0:
+        if last_frame_times["camera"] > 0 and (now - last_frame_times["camera"]) < 1.0:
+            # 正常な間隔の場合のみFPSを計算 (1秒以上の間隔があったらリセット扱い)
             fps = 1.0 / (now - last_frame_times["camera"])
             fps_stats["camera"].append(fps)
+        # 現在時刻を常に記録
         last_frame_times["camera"] = now
 
         # 画面上にFPS表示
