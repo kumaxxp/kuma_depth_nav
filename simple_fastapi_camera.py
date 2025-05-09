@@ -30,6 +30,19 @@ inference_times = deque(maxlen=1000)
 visualization_times = deque(maxlen=1000)
 encoding_times = deque(maxlen=1000)
 
+# パフォーマンス統計用の変数を追加
+fps_stats = {
+    "camera": deque(maxlen=30),
+    "depth": deque(maxlen=30),
+    "grid": deque(maxlen=30),
+    "inference": deque(maxlen=30)
+}
+last_frame_times = {
+    "camera": 0,
+    "depth": 0,
+    "grid": 0,
+}
+
 def log_processing_times():
     """5秒ごとに平均、最大、最小の処理時間をログ出力"""
     while True:
@@ -61,10 +74,16 @@ def inference_thread():
                 inference_time = time.perf_counter() - start_time
                 inference_times.append(inference_time)
                 
+                # FPS計算
+                now = time.time()
+                if last_inference_time > 0:
+                    fps = 1.0 / (now - last_inference_time)
+                    fps_stats["inference"].append(fps)
+                
                 # ロックを取得して共有メモリを更新
                 with depth_map_lock:
                     latest_depth_map = depth_map
-                    last_inference_time = current_time
+                    last_inference_time = now
                 
                 print(f"[Thread] Inference completed in {inference_time:.4f}s")
             else:
@@ -100,6 +119,19 @@ def get_depth_stream():
         vis = cv2.resize(vis, (320, 240), interpolation=cv2.INTER_NEAREST)
         visualization_times.append(time.perf_counter() - start_time)
 
+        # FPS計算とテキスト表示のみ追加
+        now = time.time()
+        if last_frame_times["depth"] > 0:
+            fps = 1.0 / (now - last_frame_times["depth"])
+            fps_stats["depth"].append(fps)
+        last_frame_times["depth"] = now
+
+        # FPS表示
+        if len(fps_stats["depth"]) > 0:
+            avg_fps = sum(fps_stats["depth"]) / len(fps_stats["depth"])
+            cv2.putText(vis, f"FPS: {avg_fps:.1f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
         start_time = time.perf_counter()
         ret, buffer = cv2.imencode('.jpg', vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         encoding_times.append(time.perf_counter() - start_time)
@@ -114,9 +146,23 @@ def get_camera_stream():
         start_time = time.perf_counter()
         ret, frame = cap.read()
         camera_times.append(time.perf_counter() - start_time)
+
+        # FPS計算
+        now = time.time()
+        if last_frame_times["camera"] > 0:
+            fps = 1.0 / (now - last_frame_times["camera"])
+            fps_stats["camera"].append(fps)
+        last_frame_times["camera"] = now
+
         if not ret:
             time.sleep(0.001)
             continue
+
+        # 画面上にFPS表示
+        if len(fps_stats["camera"]) > 0:
+            avg_fps = sum(fps_stats["camera"]) / len(fps_stats["camera"])
+            cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         start_time = time.perf_counter()
         ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -155,6 +201,18 @@ def get_depth_grid_stream():
         grid_img = cv2.resize(grid_img, (320, 240), interpolation=cv2.INTER_NEAREST)
         visualization_times.append(time.perf_counter() - start_time)
 
+        # FPS計算とテキスト表示のみ追加
+        now = time.time()
+        if last_frame_times["grid"] > 0:
+            fps = 1.0 / (now - last_frame_times["grid"])
+            fps_stats["grid"].append(fps)
+        last_frame_times["grid"] = now
+
+        # FPS表示
+        if len(fps_stats["grid"]) > 0:
+            avg_fps = sum(fps_stats["grid"]) / len(fps_stats["grid"])
+            cv2.putText(grid_img, f"FPS: {avg_fps:.1f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         start_time = time.perf_counter()
         ret, buffer = cv2.imencode('.jpg', grid_img, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         encoding_times.append(time.perf_counter() - start_time)
@@ -163,6 +221,25 @@ def get_depth_grid_stream():
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         time.sleep(0.03)  # フレームレート制限
+
+@app.get("/stats")
+async def get_stats():
+    """統計情報を取得するAPIエンドポイント"""
+    stats = {
+        "fps": {
+            "camera": round(np.mean(fps_stats["camera"]), 1) if fps_stats["camera"] else 0,
+            "depth": round(np.mean(fps_stats["depth"]), 1) if fps_stats["depth"] else 0,
+            "grid": round(np.mean(fps_stats["grid"]), 1) if fps_stats["grid"] else 0,
+            "inference": round(np.mean(fps_stats["inference"]), 1) if fps_stats["inference"] else 0,
+        },
+        "latency": {
+            "camera": round(np.mean(camera_times) * 1000, 1) if camera_times else 0,
+            "inference": round(np.mean(inference_times) * 1000, 1) if inference_times else 0,
+            "visualization": round(np.mean(visualization_times) * 1000, 1) if visualization_times else 0,
+            "encoding": round(np.mean(encoding_times) * 1000, 1) if encoding_times else 0,
+        }
+    }
+    return stats
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -176,6 +253,7 @@ async def index():
             .video-box { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
             h2 { margin-top: 0; color: #333; }
             .stats { margin-top: 20px; padding: 10px; background: #e8f5e9; border-radius: 5px; }
+            #stats-container { font-family: monospace; }
         </style>
     </head>
     <body>
@@ -195,8 +273,33 @@ async def index():
             </div>
         </div>
         <div class="stats">
-            <p>Inference rate: 5FPS (128x128), Visualization: 30FPS</p>
+            <h3>Performance Stats</h3>
+            <div id="stats-container">Loading stats...</div>
         </div>
+        
+        <script>
+            // 5秒ごとに統計情報を更新
+            setInterval(async () => {
+                try {
+                    const response = await fetch('/stats');
+                    const stats = await response.json();
+                    const container = document.getElementById('stats-container');
+                    
+                    let html = '<table>';
+                    html += '<tr><th>Stream</th><th>FPS</th><th>Latency (ms)</th></tr>';
+                    html += `<tr><td>Camera</td><td>${stats.fps.camera}</td><td>${stats.latency.camera}</td></tr>`;
+                    html += `<tr><td>Depth</td><td>${stats.fps.depth}</td><td>-</td></tr>`;
+                    html += `<tr><td>Grid</td><td>${stats.fps.grid}</td><td>-</td></tr>`;
+                    html += `<tr><td>Inference</td><td>${stats.fps.inference}</td><td>${stats.latency.inference}</td></tr>`;
+                    html += `<tr><td>Visualization</td><td>-</td><td>${stats.latency.visualization}</td></tr>`;
+                    html += '</table>';
+                    
+                    container.innerHTML = html;
+                } catch (e) {
+                    console.error('Failed to fetch stats:', e);
+                }
+            }, 5000);
+        </script>
     </body>
     </html>
     """
