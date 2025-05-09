@@ -18,11 +18,24 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
 depth_processor = DepthProcessor()
 
-# 共有メモリとして使う変数
+# 共有メモリを拡張
 latest_depth_map = None
+latest_camera_frame = None  # 最新のカメラフレームを保存
+frame_timestamp = 0  # フレームのタイムスタンプ
 depth_map_lock = threading.Lock()
 last_inference_time = 0
-INFERENCE_INTERVAL = 0.2  # 0.3秒→0.2秒に短縮（推論が高速化されたため）
+INFERENCE_INTERVAL = 0.1  # 0.2秒→0.1秒に短縮して遅延を減らす
+
+# カメラキャプチャ専用スレッド（追加）
+def camera_capture_thread():
+    global latest_camera_frame, frame_timestamp
+    while True:
+        ret, frame = cap.read()
+        if ret:
+            with depth_map_lock:  # 同じロックを使用して同期
+                latest_camera_frame = frame.copy()
+                frame_timestamp = time.time()
+        time.sleep(0.01)  # 60-100FPSを目標
 
 # 処理時間計測用
 camera_times = deque(maxlen=1000)
@@ -65,32 +78,41 @@ def inference_thread():
         current_time = time.time()
         # 前回の推論から一定時間経過した場合のみ推論実行
         if current_time - last_inference_time > INFERENCE_INTERVAL:
-            ret, frame = cap.read()
-            if ret:
-                # 推論用にさらに小さくリサイズ
-                small = cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA)
-                start_time = time.perf_counter()
-                depth_map, _ = depth_processor.predict(small)
-                inference_time = time.perf_counter() - start_time
-                inference_times.append(inference_time)
-                
-                # FPS計算
-                now = time.time()
-                if last_inference_time > 0:
-                    fps = 1.0 / (now - last_inference_time)
-                    fps_stats["inference"].append(fps)
-                
-                # ロックを取得して共有メモリを更新
-                with depth_map_lock:
-                    latest_depth_map = depth_map
-                    last_inference_time = now
-                
-                print(f"[Thread] Inference completed in {inference_time:.4f}s")
-            else:
-                time.sleep(0.01)
+            # 共有メモリからカメラフレームを取得
+            with depth_map_lock:
+                if latest_camera_frame is None:
+                    time.sleep(0.01)
+                    continue
+                frame = latest_camera_frame.copy()
+                capture_time = frame_timestamp
+            
+            # 推論用にリサイズ
+            small = cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA)
+            start_time = time.perf_counter()
+            depth_map, _ = depth_processor.predict(small)
+            inference_time = time.perf_counter() - start_time
+            inference_times.append(inference_time)
+            
+            # FPS計算
+            now = time.time()
+            if last_inference_time > 0:
+                fps = 1.0 / (now - last_inference_time)
+                fps_stats["inference"].append(fps)
+            
+            # ロックを取得して共有メモリを更新
+            with depth_map_lock:
+                latest_depth_map = depth_map
+                last_inference_time = now
+            
+            # 遅延を計算して表示
+            delay = now - capture_time
+            print(f"[Thread] Inference completed in {inference_time:.4f}s, Delay: {delay*1000:.1f}ms")
         else:
             # 推論間隔が来るまで少し待機
-            time.sleep(0.05)
+            time.sleep(0.01)  # 0.05→0.01に短縮して応答性を向上
+
+# カメラスレッド起動
+threading.Thread(target=camera_capture_thread, daemon=True).start()
 
 # 推論スレッド起動
 threading.Thread(target=inference_thread, daemon=True).start()
@@ -143,10 +165,13 @@ def get_depth_stream():
 
 def get_camera_stream():
     while True:
-        start_time = time.perf_counter()
-        ret, frame = cap.read()
-        camera_times.append(time.perf_counter() - start_time)
-
+        # 共有メモリからカメラフレームを取得
+        with depth_map_lock:
+            if latest_camera_frame is None:
+                time.sleep(0.01)
+                continue
+            frame = latest_camera_frame.copy()
+        
         # FPS計算
         now = time.time()
         if last_frame_times["camera"] > 0:
@@ -154,16 +179,13 @@ def get_camera_stream():
             fps_stats["camera"].append(fps)
         last_frame_times["camera"] = now
 
-        if not ret:
-            time.sleep(0.001)
-            continue
-
         # 画面上にFPS表示
         if len(fps_stats["camera"]) > 0:
             avg_fps = sum(fps_stats["camera"]) / len(fps_stats["camera"])
             cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+        # エンコーディング
         start_time = time.perf_counter()
         ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         encoding_times.append(time.perf_counter() - start_time)
@@ -171,7 +193,7 @@ def get_camera_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.001)
+        time.sleep(0.01)
 
 def get_depth_grid_stream():
     while True:
