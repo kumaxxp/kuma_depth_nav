@@ -24,7 +24,7 @@ latest_camera_frame = None  # 最新のカメラフレームを保存
 frame_timestamp = 0  # フレームのタイムスタンプ
 depth_map_lock = threading.Lock()
 last_inference_time = 0
-INFERENCE_INTERVAL = 0.1  # 0.2秒→0.1秒に短縮して遅延を減らす
+INFERENCE_INTERVAL = 0.08  # 0.1→0.08秒に短縮（約12.5FPS）
 
 # カメラキャプチャ専用スレッド（追加）
 def camera_capture_thread():
@@ -35,7 +35,7 @@ def camera_capture_thread():
             with depth_map_lock:  # 同じロックを使用して同期
                 latest_camera_frame = frame.copy()
                 frame_timestamp = time.time()
-        time.sleep(0.01)  # 60-100FPSを目標
+        time.sleep(0.05)  # 20FPSに制限（0.01→0.05に変更）
 
 # 処理時間計測用
 camera_times = deque(maxlen=1000)
@@ -160,7 +160,7 @@ def get_depth_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.02)  # 50FPS程度に制限
+        time.sleep(0.015)  # 約66FPSに向上（0.02→0.015に変更）
 
 def get_depth_grid_stream():
     while True:
@@ -209,7 +209,7 @@ def get_depth_grid_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.02)  # 50FPS程度に制限
+        time.sleep(0.015)  # 約66FPSに向上（0.02→0.015に変更）
 
 @app.get("/stats")
 async def get_stats():
@@ -341,7 +341,7 @@ def get_camera_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.02)  # カメラストリームも50FPSに制限
+        time.sleep(0.05)  # 20FPSに制限（0.02→0.05に変更）
 
 if __name__ == "__main__":
     import uvicorn
