@@ -16,6 +16,18 @@ cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
+# カメラバッファ設定とエラー処理を追加
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # バッファサイズを最小に
+cap.set(cv2.CAP_PROP_FPS, 30)        # カメラのFPS設定
+
+# カメラの接続状態を確認
+if not cap.isOpened():
+    print("エラー: カメラに接続できません")
+    import sys
+    sys.exit(1)
+else:
+    print(f"カメラ接続成功: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+
 depth_processor = DepthProcessor()
 
 # 共有メモリを拡張
@@ -26,16 +38,39 @@ depth_map_lock = threading.Lock()
 last_inference_time = 0
 INFERENCE_INTERVAL = 0.08  # 0.1→0.08秒に短縮（約12.5FPS）
 
-# カメラキャプチャ専用スレッド（追加）
+# カメラキャプチャ専用スレッド（修正）
 def camera_capture_thread():
     global latest_camera_frame, frame_timestamp
+    consecutive_errors = 0
+    max_errors = 5
+    
     while True:
-        ret, frame = cap.read()
-        if ret:
-            with depth_map_lock:  # 同じロックを使用して同期
-                latest_camera_frame = frame.copy()
-                frame_timestamp = time.time()
-        time.sleep(0.05)  # 20FPSに制限（0.01→0.05に変更）
+        try:
+            ret, frame = cap.read()
+            if ret:
+                with depth_map_lock:
+                    latest_camera_frame = frame.copy()
+                    frame_timestamp = time.time()
+                consecutive_errors = 0  # エラーカウンタをリセット
+            else:
+                consecutive_errors += 1
+                print(f"カメラ読み取りエラー ({consecutive_errors}/{max_errors})")
+                
+                if consecutive_errors >= max_errors:
+                    print("カメラをリセットします...")
+                    cap.release()
+                    time.sleep(1.0)
+                    cap.open(0)
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    consecutive_errors = 0
+        except Exception as e:
+            print(f"カメラ例外: {e}")
+            time.sleep(0.5)
+            
+        time.sleep(0.05)  # 20FPSを維持
 
 # 処理時間計測用
 camera_times = deque(maxlen=1000)
