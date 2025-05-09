@@ -22,7 +22,7 @@ depth_processor = DepthProcessor()
 latest_depth_map = None
 depth_map_lock = threading.Lock()
 last_inference_time = 0
-INFERENCE_INTERVAL = 0.3  # 推論は0.3秒ごとに実行（約3FPS）
+INFERENCE_INTERVAL = 0.2  # 0.3秒→0.2秒に短縮（推論が高速化されたため）
 
 # 処理時間計測用
 camera_times = deque(maxlen=1000)
@@ -168,14 +168,35 @@ def get_depth_grid_stream():
 async def index():
     return """
     <html>
-    <head><title>Fast Camera Streaming</title></head>
+    <head>
+        <title>Fast Camera Streaming</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+            .container { display: flex; flex-wrap: wrap; gap: 15px; }
+            .video-box { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+            h2 { margin-top: 0; color: #333; }
+            .stats { margin-top: 20px; padding: 10px; background: #e8f5e9; border-radius: 5px; }
+        </style>
+    </head>
     <body>
-        <h2>Camera Stream</h2>
-        <img src="/video" alt="Camera Stream" />
-        <h2>Depth Anything (Depth Map)</h2>
-        <img src="/depth_video" alt="Depth Map" />
-        <h2>Depth Grid</h2>
-        <img src="/depth_grid" alt="Depth Grid" />
+        <h1>Fast Depth Processing System</h1>
+        <div class="container">
+            <div class="video-box">
+                <h2>Camera Stream</h2>
+                <img src="/video" alt="Camera Stream" />
+            </div>
+            <div class="video-box">
+                <h2>Depth Map</h2>
+                <img src="/depth_video" alt="Depth Map" />
+            </div>
+            <div class="video-box">
+                <h2>Depth Grid</h2>
+                <img src="/depth_grid" alt="Depth Grid" />
+            </div>
+        </div>
+        <div class="stats">
+            <p>Inference rate: 5FPS (128x128), Visualization: 30FPS</p>
+        </div>
     </body>
     </html>
     """
