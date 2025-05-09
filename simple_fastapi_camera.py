@@ -119,41 +119,40 @@ threading.Thread(target=inference_thread, daemon=True).start()
 
 def get_depth_stream():
     while True:
-        start_time = time.perf_counter()
-        ret, frame = cap.read()
-        camera_times.append(time.perf_counter() - start_time)
-        if not ret:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            time.sleep(0.001)
-            continue
-
-        # 共有メモリから最新の推論結果を取得
+        # 共有メモリからカメラフレームと深度マップを取得
         with depth_map_lock:
-            current_depth_map = latest_depth_map
-        
-        # 推論結果がなければスキップ
-        if current_depth_map is None:
-            time.sleep(0.01)
-            continue
+            if latest_depth_map is None or latest_camera_frame is None:
+                time.sleep(0.01)
+                continue
+            current_depth_map = latest_depth_map.copy()
+            current_frame = latest_camera_frame.copy()  # 現在のフレームも取得
 
+        # 深度マップの可視化
         start_time = time.perf_counter()
         vis = create_depth_visualization(current_depth_map, (128, 128))
         vis = cv2.resize(vis, (320, 240), interpolation=cv2.INTER_NEAREST)
         visualization_times.append(time.perf_counter() - start_time)
 
-        # FPS計算とテキスト表示のみ追加
+        # FPS計算とテキスト表示
         now = time.time()
         if last_frame_times["depth"] > 0:
             fps = 1.0 / (now - last_frame_times["depth"])
             fps_stats["depth"].append(fps)
         last_frame_times["depth"] = now
 
-        # FPS表示
+        # FPS表示と遅延表示
         if len(fps_stats["depth"]) > 0:
             avg_fps = sum(fps_stats["depth"]) / len(fps_stats["depth"])
             cv2.putText(vis, f"FPS: {avg_fps:.1f}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # 最新の遅延情報を表示
+            with depth_map_lock:
+                delay = (time.time() - frame_timestamp) * 1000
+            cv2.putText(vis, f"Delay: {delay:.1f}ms", (10, 60),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+        # JPEG エンコード
         start_time = time.perf_counter()
         ret, buffer = cv2.imencode('.jpg', vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         encoding_times.append(time.perf_counter() - start_time)
@@ -161,59 +160,19 @@ def get_depth_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.03)  # フレームレート制限
-
-def get_camera_stream():
-    while True:
-        # 共有メモリからカメラフレームを取得
-        with depth_map_lock:
-            if latest_camera_frame is None:
-                time.sleep(0.01)
-                continue
-            frame = latest_camera_frame.copy()
-        
-        # FPS計算
-        now = time.time()
-        if last_frame_times["camera"] > 0:
-            fps = 1.0 / (now - last_frame_times["camera"])
-            fps_stats["camera"].append(fps)
-        last_frame_times["camera"] = now
-
-        # 画面上にFPS表示
-        if len(fps_stats["camera"]) > 0:
-            avg_fps = sum(fps_stats["camera"]) / len(fps_stats["camera"])
-            cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-        # エンコーディング
-        start_time = time.perf_counter()
-        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        encoding_times.append(time.perf_counter() - start_time)
-        if not ret:
-            continue
-
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.01)
+        time.sleep(0.02)  # 50FPS程度に制限
 
 def get_depth_grid_stream():
     while True:
-        start_time = time.perf_counter()
-        ret, frame = cap.read()
-        camera_times.append(time.perf_counter() - start_time)
-        if not ret:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            time.sleep(0.001)
-            continue
-
-        # 共有メモリから最新の推論結果を取得
+        # 共有メモリからカメラフレームと深度マップを取得
         with depth_map_lock:
-            current_depth_map = latest_depth_map
-        
-        # 推論結果がなければスキップ
-        if current_depth_map is None:
-            time.sleep(0.01)
-            continue
+            if latest_depth_map is None or latest_camera_frame is None:
+                time.sleep(0.01)
+                continue
+            current_depth_map = latest_depth_map.copy()
+            current_frame = latest_camera_frame.copy()  # 現在のフレームも取得
 
+        # グリッドの可視化
         start_time = time.perf_counter()
         grid_img = create_depth_grid_visualization(current_depth_map, grid_size=(10, 10), cell_size=18)
         if grid_img is None or len(grid_img.shape) < 2:
@@ -223,18 +182,26 @@ def get_depth_grid_stream():
         grid_img = cv2.resize(grid_img, (320, 240), interpolation=cv2.INTER_NEAREST)
         visualization_times.append(time.perf_counter() - start_time)
 
-        # FPS計算とテキスト表示のみ追加
+        # FPS計算とテキスト表示
         now = time.time()
         if last_frame_times["grid"] > 0:
             fps = 1.0 / (now - last_frame_times["grid"])
             fps_stats["grid"].append(fps)
         last_frame_times["grid"] = now
 
-        # FPS表示
+        # FPS表示と遅延表示
         if len(fps_stats["grid"]) > 0:
             avg_fps = sum(fps_stats["grid"]) / len(fps_stats["grid"])
             cv2.putText(grid_img, f"FPS: {avg_fps:.1f}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # 最新の遅延情報を表示
+            with depth_map_lock:
+                delay = (time.time() - frame_timestamp) * 1000
+            cv2.putText(grid_img, f"Delay: {delay:.1f}ms", (10, 60),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # JPEG エンコード
         start_time = time.perf_counter()
         ret, buffer = cv2.imencode('.jpg', grid_img, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         encoding_times.append(time.perf_counter() - start_time)
@@ -242,11 +209,15 @@ def get_depth_grid_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.03)  # フレームレート制限
+        time.sleep(0.02)  # 50FPS程度に制限
 
 @app.get("/stats")
 async def get_stats():
     """統計情報を取得するAPIエンドポイント"""
+    # 共有メモリからフレームタイムスタンプを取得して遅延を計算
+    with depth_map_lock:
+        current_delay = (time.time() - frame_timestamp) * 1000 if frame_timestamp > 0 else 0
+        
     stats = {
         "fps": {
             "camera": round(np.mean(fps_stats["camera"]), 1) if fps_stats["camera"] else 0,
@@ -259,6 +230,7 @@ async def get_stats():
             "inference": round(np.mean(inference_times) * 1000, 1) if inference_times else 0,
             "visualization": round(np.mean(visualization_times) * 1000, 1) if visualization_times else 0,
             "encoding": round(np.mean(encoding_times) * 1000, 1) if encoding_times else 0,
+            "total_delay": round(current_delay, 1)  # 現在の総遅延を追加
         }
     }
     return stats
@@ -300,7 +272,7 @@ async def index():
         </div>
         
         <script>
-            // 5秒ごとに統計情報を更新
+            // 2秒ごとに統計情報を更新（より頻繁に更新）
             setInterval(async () => {
                 try {
                     const response = await fetch('/stats');
@@ -314,13 +286,14 @@ async def index():
                     html += `<tr><td>Grid</td><td>${stats.fps.grid}</td><td>-</td></tr>`;
                     html += `<tr><td>Inference</td><td>${stats.fps.inference}</td><td>${stats.latency.inference}</td></tr>`;
                     html += `<tr><td>Visualization</td><td>-</td><td>${stats.latency.visualization}</td></tr>`;
+                    html += `<tr><td>Total Delay</td><td>-</td><td>${stats.latency.total_delay}</td></tr>`;
                     html += '</table>';
                     
                     container.innerHTML = html;
                 } catch (e) {
                     console.error('Failed to fetch stats:', e);
                 }
-            }, 5000);
+            }, 2000); // 5秒→2秒に短縮
         </script>
     </body>
     </html>
