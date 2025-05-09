@@ -45,17 +45,18 @@ def get_depth_stream():
         ret, frame = cap.read()
         camera_times.append(time.perf_counter() - start_time)
         if not ret:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # フレームバッファをクリア
             time.sleep(0.001)
             continue
 
         start_time = time.perf_counter()
-        small = cv2.resize(frame, (224, 224))
+        small = cv2.resize(frame, (160, 160))  # 推論用画像をさらに縮小
         depth_map, _ = depth_processor.predict(small)
         inference_times.append(time.perf_counter() - start_time)
 
         start_time = time.perf_counter()
         vis = create_depth_visualization(depth_map, small.shape)
-        vis = cv2.resize(vis, (320, 240))
+        vis = cv2.resize(vis, (320, 240), interpolation=cv2.INTER_NEAREST)  # 高速リサイズ
         visualization_times.append(time.perf_counter() - start_time)
 
         start_time = time.perf_counter()
@@ -91,11 +92,12 @@ def get_depth_grid_stream():
         ret, frame = cap.read()
         camera_times.append(time.perf_counter() - start_time)
         if not ret:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # フレームバッファをクリア
             time.sleep(0.001)
             continue
 
         start_time = time.perf_counter()
-        small = cv2.resize(frame, (224, 224))
+        small = cv2.resize(frame, (160, 160))  # 推論用画像をさらに縮小
         depth_map, _ = depth_processor.predict(small)
         inference_times.append(time.perf_counter() - start_time)
 
@@ -105,7 +107,7 @@ def get_depth_grid_stream():
             grid_img = 128 * np.ones((240, 320, 3), dtype=np.uint8)
         elif len(grid_img.shape) == 2 or (len(grid_img.shape) == 3 and grid_img.shape[2] == 1):
             grid_img = cv2.cvtColor(grid_img, cv2.COLOR_GRAY2BGR)
-        grid_img = cv2.resize(grid_img, (320, 240))
+        grid_img = cv2.resize(grid_img, (320, 240), interpolation=cv2.INTER_NEAREST)  # 高速リサイズ
         visualization_times.append(time.perf_counter() - start_time)
 
         start_time = time.perf_counter()
