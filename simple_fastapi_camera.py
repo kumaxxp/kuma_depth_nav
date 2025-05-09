@@ -311,6 +311,38 @@ async def depth_video():
 async def depth_grid():
     return StreamingResponse(get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+def get_camera_stream():
+    while True:
+        # 共有メモリからカメラフレームを取得
+        with depth_map_lock:
+            if latest_camera_frame is None:
+                time.sleep(0.01)
+                continue
+            frame = latest_camera_frame.copy()
+        
+        # FPS計算
+        now = time.time()
+        if last_frame_times["camera"] > 0:
+            fps = 1.0 / (now - last_frame_times["camera"])
+            fps_stats["camera"].append(fps)
+        last_frame_times["camera"] = now
+
+        # 画面上にFPS表示
+        if len(fps_stats["camera"]) > 0:
+            avg_fps = sum(fps_stats["camera"]) / len(fps_stats["camera"])
+            cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # エンコーディング
+        start_time = time.perf_counter()
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        encoding_times.append(time.perf_counter() - start_time)
+        if not ret:
+            continue
+
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        time.sleep(0.02)  # カメラストリームも50FPSに制限
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8888)
