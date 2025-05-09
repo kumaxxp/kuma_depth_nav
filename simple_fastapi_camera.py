@@ -5,11 +5,33 @@ import threading
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 from collections import deque
+from contextlib import asynccontextmanager
 
 # Depth Anything用
 from depth_processor import DepthProcessor, create_depth_visualization, create_depth_grid_visualization
 
-app = FastAPI()
+# FastAPIのライフサイクル管理を最新のasynccontextmanagerに変更
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションのライフサイクル管理"""
+    # 起動時の処理
+    print("アプリケーション起動: カメラとスレッドを初期化します")
+    # スレッドは既にグローバルで開始されているので、ここでは何もしない
+    
+    yield  # アプリケーション実行中
+    
+    # 終了時の処理
+    print("アプリケーション終了: リソースを解放します")
+    try:
+        # カメラのクリーンアップ
+        if cap is not None:
+            cap.release()
+            print("カメラリソースを解放しました")
+    except Exception as e:
+        print(f"終了処理中のエラー: {e}")
+
+# FastAPIアプリケーションをlifespanコンテキストマネージャーで初期化
+app = FastAPI(lifespan=lifespan)
 
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
@@ -507,8 +529,27 @@ def get_camera_stream():
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         time.sleep(0.05)  # 20FPSに制限（0.02→0.05に変更）
 
-# サーバー停止時にカメラをきれいに解放するための処理を追加
-@app.on_event("shutdown")
-async def shutdown_event():
-    cap.release()
-    print("カメラリソースを解放しました")
+# 例外ハンドリングを強化
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    error_msg = f"予期せぬエラーが発生しました: {str(exc)}"
+    print(f"[エラー] {error_msg}")
+    import traceback
+    print(traceback.format_exc())
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"detail": error_msg}
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=8888)
+    except KeyboardInterrupt:
+        print("Ctrl+Cが押されました。アプリケーションを終了します。")
+    except Exception as e:
+        print(f"予期せぬエラーでアプリケーションが終了しました: {e}")
+        import traceback
+        print(traceback.format_exc())
