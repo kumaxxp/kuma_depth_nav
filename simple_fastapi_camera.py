@@ -17,6 +17,12 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
 depth_processor = DepthProcessor()
 
+# 共有メモリとして使う変数
+latest_depth_map = None
+depth_map_lock = threading.Lock()
+last_inference_time = 0
+INFERENCE_INTERVAL = 0.3  # 推論は0.3秒ごとに実行（約3FPS）
+
 # 処理時間計測用
 camera_times = deque(maxlen=1000)
 inference_times = deque(maxlen=1000)
@@ -39,24 +45,59 @@ def log_processing_times():
 import threading
 threading.Thread(target=log_processing_times, daemon=True).start()
 
+# 推論専用の関数を追加
+def inference_thread():
+    global latest_depth_map, last_inference_time
+    while True:
+        current_time = time.time()
+        # 前回の推論から一定時間経過した場合のみ推論実行
+        if current_time - last_inference_time > INFERENCE_INTERVAL:
+            ret, frame = cap.read()
+            if ret:
+                # 推論用にさらに小さくリサイズ
+                small = cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA)
+                start_time = time.perf_counter()
+                depth_map, _ = depth_processor.predict(small)
+                inference_time = time.perf_counter() - start_time
+                inference_times.append(inference_time)
+                
+                # ロックを取得して共有メモリを更新
+                with depth_map_lock:
+                    latest_depth_map = depth_map
+                    last_inference_time = current_time
+                
+                print(f"[Thread] Inference completed in {inference_time:.4f}s")
+            else:
+                time.sleep(0.01)
+        else:
+            # 推論間隔が来るまで少し待機
+            time.sleep(0.05)
+
+# 推論スレッド起動
+threading.Thread(target=inference_thread, daemon=True).start()
+
 def get_depth_stream():
     while True:
         start_time = time.perf_counter()
         ret, frame = cap.read()
         camera_times.append(time.perf_counter() - start_time)
         if not ret:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # フレームバッファをクリア
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             time.sleep(0.001)
             continue
 
-        start_time = time.perf_counter()
-        small = cv2.resize(frame, (160, 160))  # 推論用画像をさらに縮小
-        depth_map, _ = depth_processor.predict(small)
-        inference_times.append(time.perf_counter() - start_time)
+        # 共有メモリから最新の推論結果を取得
+        with depth_map_lock:
+            current_depth_map = latest_depth_map
+        
+        # 推論結果がなければスキップ
+        if current_depth_map is None:
+            time.sleep(0.01)
+            continue
 
         start_time = time.perf_counter()
-        vis = create_depth_visualization(depth_map, small.shape)
-        vis = cv2.resize(vis, (320, 240), interpolation=cv2.INTER_NEAREST)  # 高速リサイズ
+        vis = create_depth_visualization(current_depth_map, (128, 128))
+        vis = cv2.resize(vis, (320, 240), interpolation=cv2.INTER_NEAREST)
         visualization_times.append(time.perf_counter() - start_time)
 
         start_time = time.perf_counter()
@@ -66,7 +107,7 @@ def get_depth_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.001)
+        time.sleep(0.03)  # フレームレート制限
 
 def get_camera_stream():
     while True:
@@ -92,22 +133,26 @@ def get_depth_grid_stream():
         ret, frame = cap.read()
         camera_times.append(time.perf_counter() - start_time)
         if not ret:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # フレームバッファをクリア
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             time.sleep(0.001)
             continue
 
-        start_time = time.perf_counter()
-        small = cv2.resize(frame, (160, 160))  # 推論用画像をさらに縮小
-        depth_map, _ = depth_processor.predict(small)
-        inference_times.append(time.perf_counter() - start_time)
+        # 共有メモリから最新の推論結果を取得
+        with depth_map_lock:
+            current_depth_map = latest_depth_map
+        
+        # 推論結果がなければスキップ
+        if current_depth_map is None:
+            time.sleep(0.01)
+            continue
 
         start_time = time.perf_counter()
-        grid_img = create_depth_grid_visualization(depth_map, grid_size=(12, 16), cell_size=18)
+        grid_img = create_depth_grid_visualization(current_depth_map, grid_size=(10, 10), cell_size=18)
         if grid_img is None or len(grid_img.shape) < 2:
             grid_img = 128 * np.ones((240, 320, 3), dtype=np.uint8)
         elif len(grid_img.shape) == 2 or (len(grid_img.shape) == 3 and grid_img.shape[2] == 1):
             grid_img = cv2.cvtColor(grid_img, cv2.COLOR_GRAY2BGR)
-        grid_img = cv2.resize(grid_img, (320, 240), interpolation=cv2.INTER_NEAREST)  # 高速リサイズ
+        grid_img = cv2.resize(grid_img, (320, 240), interpolation=cv2.INTER_NEAREST)
         visualization_times.append(time.perf_counter() - start_time)
 
         start_time = time.perf_counter()
@@ -117,7 +162,7 @@ def get_depth_grid_stream():
             continue
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.001)
+        time.sleep(0.03)  # フレームレート制限
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
