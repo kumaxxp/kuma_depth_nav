@@ -36,14 +36,23 @@ def main():
             print("キャリブレーションデータを読み込めませんでした")
     else:
         print("キャリブレーションデータが見つかりません")
-    
-    # ウィンドウ作成
-    cv2.namedWindow('Camera Test', cv2.WINDOW_NORMAL)
-    
-    print("\nカメラテスト中... Escキーで終了")
+      # GUIなしテストモード
+    print("\nカメラテスト中... Ctrl+Cで終了")
     print("現在のカメラの解像度:", camera.width, "x", camera.height)
     
     try:
+        # キャリブレーション情報を表示
+        print("\nキャリブレーション情報:")
+        if calibration.camera_matrix is not None:
+            print("カメラ行列:")
+            print(calibration.camera_matrix)
+        if calibration.dist_coeffs is not None:
+            print("歪み係数:")
+            print(calibration.dist_coeffs)
+        if hasattr(calibration, "rms_error") and calibration.rms_error is not None:
+            print(f"RMS誤差: {calibration.rms_error:.4f}")
+            
+        # キャリブレーションのON/OFF切り替え
         while True:
             # カメラからフレームを取得
             frame, timestamp = camera.get_frame()
@@ -53,22 +62,20 @@ def main():
                 time.sleep(0.1)
                 continue
                 
-            # タイムスタンプとキャリブレーション状態を表示
-            cv2.putText(frame, f"Time: {timestamp:.3f}s", (10, 30), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # 1秒ごとに状態を表示
+            time.sleep(1)
             
-            calib_status = "ON" if camera.use_calibration else "OFF" 
-            cv2.putText(frame, f"Calibration: {calib_status}", (10, 60), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # 現在の状態を表示
+            calib_status = "ON" if camera.use_calibration else "OFF"
+            print(f"現在の状態: タイムスタンプ={timestamp:.3f}s, キャリブレーション={calib_status}")
             
-            # 表示
-            cv2.imshow('Camera Test', frame)
+            # ユーザー入力をチェック
+            print("\nコマンド: [t] キャリブレーション切り替え, [q] 終了")
+            user_input = input("> ")
             
-            # キー入力確認
-            key = cv2.waitKey(10) & 0xFF
-            if key == 27:  # Escキー
+            if user_input.lower() == 'q':
                 break
-            elif key == 32:  # スペースキー
+            elif user_input.lower() == 't':
                 # キャリブレーションのON/OFFを切り替え
                 if camera.use_calibration:
                     camera.disable_calibration()
@@ -76,9 +83,7 @@ def main():
                 else:
                     camera.set_calibration(calibration)
                     print("キャリブレーション: ON")
-    
-    finally:
-        cv2.destroyAllWindows()
+      finally:
         print("\nテスト終了")
 
 if __name__ == "__main__":
