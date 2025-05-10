@@ -110,11 +110,13 @@ def create_top_down_occupancy_grid(points, grid_resolution=GRID_RESOLUTION,
     
     # グリッドセルごとに高さ情報を集計
     for i, (x, y) in enumerate(zip(grid_x, grid_y)):
-        if height[i] < -height_threshold:
+        # 深度値が大きいほど近いという新しい実装に合わせて条件を修正
+        # 負の値が大きいほど床に近い（低い位置）
+        if height[i] < -height_threshold:  # Y座標が負で、しきい値より下（床レベル）
             # 床または通行可能な領域
             grid[y, x] = 2
         else:
-            # 障害物
+            # 障害物（床より上にある物体）
             grid[y, x] = 1
     
     return grid
