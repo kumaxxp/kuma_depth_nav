@@ -36,7 +36,8 @@ class CameraCapture:
         self.running = True
         self.capture_thread = threading.Thread(target=self._camera_capture_loop, daemon=True)
         self.capture_thread.start()
-      def _initialize_camera(self):
+
+    def _initialize_camera(self):
         """カメラを初期化する"""
         self.cap = cv2.VideoCapture(self.camera_id)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
