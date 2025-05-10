@@ -275,12 +275,21 @@ async def get_stats():
     with depth_map_lock:
         current_delay = (time.time() - frame_timestamp) * 1000 if frame_timestamp > 0 else 0
         
+    # 中央値を計算するヘルパー関数
+    def median(values):
+        if not values:
+            return 0
+        values_list = list(values)
+        values_list.sort()
+        return values_list[len(values_list) // 2]
+        
     stats = {
         "fps": {
-            "camera": round(np.mean(fps_stats["camera"]), 1) if fps_stats["camera"] else 0,
-            "depth": round(np.mean(fps_stats["depth"]), 1) if fps_stats["depth"] else 0,
-            "grid": round(np.mean(fps_stats["grid"]), 1) if fps_stats["grid"] else 0,
-            "inference": round(np.mean(fps_stats["inference"]), 1) if fps_stats["inference"] else 0,
+            # 平均値の代わりに中央値を使用
+            "camera": round(median(fps_stats["camera"]), 1) if fps_stats["camera"] else 0,
+            "depth": round(median(fps_stats["depth"]), 1) if fps_stats["depth"] else 0,
+            "grid": round(median(fps_stats["grid"]), 1) if fps_stats["grid"] else 0,
+            "inference": round(median(fps_stats["inference"]), 1) if fps_stats["inference"] else 0,
         },
         "latency": {
             "camera": round(np.mean(camera_times) * 1000, 1) if camera_times else 0,
@@ -513,6 +522,11 @@ async def depth_grid():
     return StreamingResponse(get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 def get_camera_stream():
+    # ストリーム開始時のタイムスタンプをリセット
+    last_frame_times["camera"] = 0
+    fps_stats["camera"].clear()  # FPS統計をクリア
+    first_frame = True  # 最初のフレームかどうかを追跡
+    
     while True:
         # 共有メモリからカメラフレームを取得
         with depth_map_lock:
@@ -521,20 +535,29 @@ def get_camera_stream():
                 continue
             frame = latest_camera_frame.copy()
         
-        # FPS計算 - 初回または長時間間隔があった場合は計算をスキップ
+        # FPS計算 - 改善版
         now = time.time()
-        if last_frame_times["camera"] > 0 and (now - last_frame_times["camera"]) < 1.0:
-            # 正常な間隔の場合のみFPSを計算 (1秒以上の間隔があったらリセット扱い)
+        if first_frame:
+            # 最初のフレームはFPS計算をスキップ、タイムスタンプのみ記録
+            first_frame = False
+        elif (now - last_frame_times["camera"]) < 0.5:  # 0.5秒以内の正常な間隔
+            # 正常な間隔の場合のみFPSを計算
             fps = 1.0 / (now - last_frame_times["camera"])
-            fps_stats["camera"].append(fps)
+            # 異常値フィルタリング (FPSが200を超える値はエラーと見なす)
+            if fps < 200:  
+                fps_stats["camera"].append(fps)
+        
         # 現在時刻を常に記録
         last_frame_times["camera"] = now
 
         # 画面上にFPS表示
         if len(fps_stats["camera"]) > 0:
-            avg_fps = sum(fps_stats["camera"]) / len(fps_stats["camera"])
-            cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # 中央値を使用 (平均値より外れ値の影響を受けにくい)
+            camera_fps_values = list(fps_stats["camera"])
+            camera_fps_values.sort()
+            median_fps = camera_fps_values[len(camera_fps_values) // 2]
+            cv2.putText(frame, f"FPS: {median_fps:.1f}", (10, 30), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         # エンコーディング
         start_time = time.perf_counter()
