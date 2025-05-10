@@ -314,117 +314,23 @@ async def index():
             h2 { margin-top: 0; color: #333; }
             .stats { margin-top: 20px; padding: 10px; background: #e8f5e9; border-radius: 5px; }
             #stats-container { font-family: monospace; }
-            .switch-container { margin-top: 10px; display: flex; align-items: center; }
-            .switch {
-                position: relative;
-                display: inline-block;
-                width: 48px;
-                height: 24px;
-                margin-right: 10px;
-            }
-            .switch input {
-                opacity: 0;
-                width: 0;
-                height: 0;
-            }
-            .slider {
-                position: absolute;
-                cursor: pointer;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background-color: #ccc;
-                transition: .4s;
-                border-radius: 24px;
-            }
-            .slider:before {
-                position: absolute;
-                content: "";
-                height: 16px;
-                width: 16px;
-                left: 4px;
-                bottom: 4px;
-                background-color: white;
-                transition: .4s;
-                border-radius: 50%;
-            }
-            input:checked + .slider {
-                background-color: #4CAF50;
-            }
-            input:checked + .slider:before {
-                transform: translateX(24px);
-            }
-            .stream-img {
-                max-width: 100%;
-                height: auto;
-                transition: opacity 0.3s;
-            }
-            .control-panel {
-                background: white;
-                padding: 15px;
-                border-radius: 5px;
-                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-                margin-bottom: 15px;
-            }
-            .control-title {
-                margin-top: 0;
-                font-size: 1.2em;
-                color: #333;
-            }
-            .cpu-usage {
-                background: #e3f2fd;
-                padding: 10px;
-                border-radius: 4px;
-                margin-top: 10px;
-            }
         </style>
     </head>
     <body>
         <h1>Fast Depth Processing System</h1>
         
-        <div class="control-panel">
-            <h3 class="control-title">表示設定</h3>
-            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                <div class="switch-container">
-                    <label class="switch">
-                        <input type="checkbox" id="camera-toggle" checked>
-                        <span class="slider"></span>
-                    </label>
-                    <label for="camera-toggle">カメラ</label>
-                </div>
-                <div class="switch-container">
-                    <label class="switch">
-                        <input type="checkbox" id="depth-toggle" checked>
-                        <span class="slider"></span>
-                    </label>
-                    <label for="depth-toggle">深度マップ</label>
-                </div>
-                <div class="switch-container">
-                    <label class="switch">
-                        <input type="checkbox" id="grid-toggle" checked>
-                        <span class="slider"></span>
-                    </label>
-                    <label for="grid-toggle">グリッド</label>
-                </div>
-            </div>
-            <div class="cpu-usage">
-                <strong>CPU/GPU 使用率を調整:</strong> 表示を無効にすることで処理負荷を軽減します
-            </div>
-        </div>
-        
         <div class="container">
-            <div class="video-box" id="camera-box">
+            <div class="video-box">
                 <h2>Camera Stream</h2>
-                <img src="/video" alt="Camera Stream" class="stream-img" id="camera-stream" />
+                <img src="/video" alt="Camera Stream" />
             </div>
-            <div class="video-box" id="depth-box">
+            <div class="video-box">
                 <h2>Depth Map</h2>
-                <img src="/depth_video" alt="Depth Map" class="stream-img" id="depth-stream" />
+                <img src="/depth_video" alt="Depth Map" />
             </div>
-            <div class="video-box" id="grid-box">
+            <div class="video-box">
                 <h2>Depth Grid</h2>
-                <img src="/depth_grid" alt="Depth Grid" class="stream-img" id="grid-stream" />
+                <img src="/depth_grid" alt="Depth Grid" />
             </div>
         </div>
         <div class="stats">
@@ -433,43 +339,6 @@ async def index():
         </div>
         
         <script>
-            // ストリーム表示の切り替え
-            document.getElementById('camera-toggle').addEventListener('change', function(e) {
-                const stream = document.getElementById('camera-stream');
-                if (this.checked) {
-                    // FPSリセット用のクエリパラメータを追加（キャッシュ防止と再初期化）
-                    stream.src = "/video?t=" + new Date().getTime(); // ストリームを開始
-                    stream.style.opacity = '1';
-                } else {
-                    stream.src = ""; // ストリームを停止
-                    stream.style.opacity = '0.3';
-                }
-            });
-            
-            document.getElementById('depth-toggle').addEventListener('change', function(e) {
-                const stream = document.getElementById('depth-stream');
-                if (this.checked) {
-                    // FPSリセット用のクエリパラメータを追加
-                    stream.src = "/depth_video?t=" + new Date().getTime(); // ストリームを開始
-                    stream.style.opacity = '1';
-                } else {
-                    stream.src = ""; // ストリームを停止
-                    stream.style.opacity = '0.3';
-                }
-            });
-            
-            document.getElementById('grid-toggle').addEventListener('change', function(e) {
-                const stream = document.getElementById('grid-stream');
-                if (this.checked) {
-                    // FPSリセット用のクエリパラメータを追加
-                    stream.src = "/depth_grid?t=" + new Date().getTime(); // ストリームを開始
-                    stream.style.opacity = '1';
-                } else {
-                    stream.src = ""; // ストリームを停止
-                    stream.style.opacity = '0.3';
-                }
-            });
-            
             // 2秒ごとに統計情報を更新
             setInterval(async () => {
                 try {
@@ -499,26 +368,14 @@ async def index():
 
 @app.get("/video")
 async def video():
-    # リクエスト時点でFPSの計算をリセット
-    last_frame_times["camera"] = 0
-    # カメラフレームの統計をクリア
-    fps_stats["camera"].clear()
     return StreamingResponse(get_camera_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/depth_video")
 async def depth_video():
-    # リクエスト時点でFPSの計算をリセット
-    last_frame_times["depth"] = 0
-    # 深度のFPS統計をクリア
-    fps_stats["depth"].clear()
     return StreamingResponse(get_depth_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/depth_grid")
 async def depth_grid():
-    # リクエスト時点でFPSの計算をリセット
-    last_frame_times["grid"] = 0
-    # グリッドのFPS統計をクリア
-    fps_stats["grid"].clear()
     return StreamingResponse(get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 def get_camera_stream():
