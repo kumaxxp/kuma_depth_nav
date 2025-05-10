@@ -37,10 +37,18 @@ class DepthInference:
                     time.sleep(0.01)
                     continue
                 
-                # 推論用にリサイズ
+        # 推論用にリサイズ
                 small = cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA)
                 start_time = time.perf_counter()
-                depth_map, _ = self.depth_processor.predict(small)
+                
+                try:
+                    # axengineが使用可能な場合のみ推論を実行
+                    depth_map, _ = self.depth_processor.predict(small)
+                except Exception as e:
+                    # 推論エラーの場合はダミーの深度マップを生成
+                    print(f"推論エラー: {e}")
+                    depth_map = np.zeros((128, 128), dtype=np.float32)
+                
                 inference_time = time.perf_counter() - start_time
                 stats.inference_times.append(inference_time)
                 

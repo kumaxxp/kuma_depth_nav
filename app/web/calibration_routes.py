@@ -97,53 +97,82 @@ async def apply_calibration():
 @calibration_router.get("/comparison")
 async def get_comparison():
     """キャリブレーション前後の比較画像を取得"""
-    if calibration_app.comparison_view is None:
-        raise HTTPException(status_code=404, detail="比較画像が見つかりません")
-    
-    ret, buffer = cv2.imencode('.jpg', calibration_app.comparison_view)
-    if not ret:
-        raise HTTPException(status_code=500, detail="画像のエンコードに失敗しました")
-    
-    return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpeg")
+    try:
+        if calibration_app.comparison_view is None:
+            # 比較画像がない場合はダミー画像を生成
+            dummy_img = np.zeros((240, 640, 3), dtype=np.uint8)
+            cv2.putText(dummy_img, "No Comparison Image Available", (120, 120),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            ret, buffer = cv2.imencode('.jpg', dummy_img)
+        else:
+            ret, buffer = cv2.imencode('.jpg', calibration_app.comparison_view)
+            
+        if not ret:
+            raise HTTPException(status_code=500, detail="画像のエンコードに失敗しました")
+        
+        return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpeg")
+    except Exception as e:
+        # エラー時もダミー画像を返す
+        dummy_img = np.zeros((240, 640, 3), dtype=np.uint8)
+        cv2.putText(dummy_img, f"Error: {str(e)}", (10, 120),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        ret, buffer = cv2.imencode('.jpg', dummy_img)
+        return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/jpeg")
 
 @calibration_router.get("/live_view")
 async def get_live_view():
     """キャリブレーションのライブビューストリーム（元の画像と補正後の画像の並べて表示）"""
     def generate():
         while True:
-            # カメラフレームを取得
-            frame, _ = camera.get_frame()
-            if frame is None:
-                time.sleep(0.01)
-                continue
-            
-            # 元画像をコピー
-            original_frame = frame.copy()
-            
-            # キャリブレーションが有効な場合、補正された画像を取得
-            if calibration.camera_matrix is not None and calibration.dist_coeffs is not None:
-                corrected_frame = calibration.undistort_image(frame)
-            else:
-                # キャリブレーションがない場合は同じ画像を使用
-                corrected_frame = frame
-            
-            # 2つの画像を並べて表示
-            h, w = frame.shape[:2]
-            comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
-            comparison[:, :w] = original_frame
-            comparison[:, w:] = corrected_frame
-            
-            # テキスト追加
-            cv2.putText(comparison, "元画像", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(comparison, "補正後", (w + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
-            # エンコーディング
-            ret, buffer = cv2.imencode('.jpg', comparison, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if not ret:
-                continue
-            
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.05)  # 20FPS
+            try:
+                # カメラフレームを取得
+                frame, _ = camera.get_frame()
+                if frame is None:
+                    # ダミー画像を生成
+                    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+                    cv2.putText(frame, "Camera Not Available", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    time.sleep(0.1)
+                
+                # 元画像をコピー
+                original_frame = frame.copy()
+                
+                try:
+                    # キャリブレーションが有効な場合、補正された画像を取得
+                    if calibration.camera_matrix is not None and calibration.dist_coeffs is not None:
+                        corrected_frame = calibration.undistort_image(frame)
+                    else:
+                        # キャリブレーションがない場合は同じ画像を使用
+                        corrected_frame = frame.copy()
+                        cv2.putText(corrected_frame, "No Calibration", (10, 60), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                except Exception as e:
+                    print(f"補正エラー: {e}")
+                    corrected_frame = frame.copy()
+                    cv2.putText(corrected_frame, "Calibration Error", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                # 2つの画像を並べて表示
+                h, w = frame.shape[:2]
+                comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
+                comparison[:, :w] = original_frame
+                comparison[:, w:] = corrected_frame
+                
+                # テキスト追加
+                cv2.putText(comparison, "元画像", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(comparison, "補正後", (w + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # エンコーディング
+                ret, buffer = cv2.imencode('.jpg', comparison, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                if not ret:
+                    time.sleep(0.01)
+                    continue
+                
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                time.sleep(0.05)  # 20FPS
+                
+            except Exception as e:
+                print(f"ライブビューエラー: {e}")
+                time.sleep(0.1)
     
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 

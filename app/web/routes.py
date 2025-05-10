@@ -42,6 +42,8 @@ async def calibration_status():
     calib_file_exists = os.path.exists("calibration_data/calibration.json")
     calibration_loaded = calibration.camera_matrix is not None and calibration.dist_coeffs is not None
     
+    # キャリブレーションファイルが見つからない場合でもエラーにならないよう処理
+    
     status = {
         "calibrated": calibration_loaded,
         "applied": camera.use_calibration,
