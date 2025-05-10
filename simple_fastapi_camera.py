@@ -465,18 +465,36 @@ def get_top_down_view_stream():
         start_time = time.perf_counter()
         
         try:
+            # 深度マップの形状を確認して調整
+            if len(current_depth_map.shape) == 4:  # (1, H, W, 1) 形式
+                depth_map_2d = current_depth_map.reshape(current_depth_map.shape[1:3])
+            elif len(current_depth_map.shape) == 3:  # (H, W, 1) 形式
+                depth_map_2d = current_depth_map.reshape(current_depth_map.shape[:2])
+            else:
+                depth_map_2d = current_depth_map  # すでに2D
+            
+            # デバッグ情報を出力
+            print(f"深度マップ形状: {current_depth_map.shape} -> 変換後: {depth_map_2d.shape}")
+            
             # 1. 相対深度マップを絶対深度マップ（メートル単位）に変換
-            absolute_depth = convert_to_absolute_depth(current_depth_map, scaling_factor)
+            absolute_depth = convert_to_absolute_depth(depth_map_2d, scaling_factor)
             
             # 2. 深度マップから3D点群を生成
             points = depth_to_point_cloud(absolute_depth)
             
-            # 3. 点群から天頂視点の占有グリッドを生成
-            occupancy_grid = create_top_down_occupancy_grid(points, 
-                                                           grid_resolution, 
-                                                           grid_width, 
-                                                           grid_height, 
-                                                           height_threshold)
+            # 点群データの情報をログ出力
+            print(f"点群データサイズ: {points.shape if hasattr(points, 'shape') else 'None'}")
+            if points.size == 0:
+                # 点がない場合は空のグリッドを使用
+                print("警告: 生成された点群が空です")
+                occupancy_grid = np.zeros((grid_height, grid_width), dtype=np.uint8)
+            else:
+                # 3. 点群から天頂視点の占有グリッドを生成
+                occupancy_grid = create_top_down_occupancy_grid(points, 
+                                                               grid_resolution, 
+                                                               grid_width, 
+                                                               grid_height, 
+                                                               height_threshold)
             
             # 4. 占有グリッドを可視化
             top_down_view = visualize_occupancy_grid(occupancy_grid)
@@ -514,6 +532,8 @@ def get_top_down_view_stream():
             
         except Exception as e:
             print(f"天頂視点マップ生成エラー: {e}")
+            import traceback
+            print(traceback.format_exc())
             # エラー時はグレーの画像を表示
             top_down_view = np.ones((320, 320, 3), dtype=np.uint8) * 50
             cv2.putText(top_down_view, "Error", (120, 160), 
