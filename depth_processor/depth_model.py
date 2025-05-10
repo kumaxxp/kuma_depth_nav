@@ -10,6 +10,16 @@ import logging
 
 # ロガーの取得
 logger = logging.getLogger("kuma_depth_nav.depth_model")
+# --- ここから追加 ---
+# logger のレベルを DEBUG に設定
+logger.setLevel(logging.DEBUG)
+# ハンドラが設定されていなければ、標準出力へのハンドラを追加
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+# --- ここまで追加 ---
 
 # axengine をインポート
 try:
