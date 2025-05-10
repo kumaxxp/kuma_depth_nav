@@ -154,12 +154,12 @@ class CameraCalibration:
                       open(f"{pickle_dir}/calibration.pkl", "wb"))
             pickle.dump(self.camera_matrix, open(f"{pickle_dir}/cameraMatrix.pkl", "wb"))
             pickle.dump(self.dist_coeffs, open(f"{pickle_dir}/dist.pkl", "wb"))
-            
-            return True
+              return True
         except Exception as e:
             print(f"保存エラー: {e}")
             return False
-      def load_calibration(self, filepath: str = "calibration_data/calibration.json") -> bool:
+    
+    def load_calibration(self, filepath: str = "calibration_data/calibration.json") -> bool:
         """保存されたキャリブレーション結果を読み込みます
 
         Args:
