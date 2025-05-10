@@ -116,15 +116,29 @@ def depth_to_color(depth_normalized):
     # HSVからBGRへの変換
     return cv2.cvtColor(np.uint8([[[hue, saturation, value]]]), cv2.COLOR_HSV2BGR)[0][0]
 
-def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(16, 12), max_distance=10.0, cell_size=60):
+def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(16, 12), 
+                                   max_distance=10.0, cell_size=60, return_grid_data=False):
+    """
+    深度マップのグリッド可視化を行う
+    
+    Args:
+        depth_map: 深度マップ
+        absolute_depth: 絶対深度マップ（オプション）
+        grid_size: グリッドサイズ (cols, rows)
+        max_distance: 最大距離
+        cell_size: セルサイズ（ピクセル）
+        return_grid_data: グリッド深度データも返すかどうか
 
+    Returns:
+        グリッド可視化画像、またはタプル (画像, グリッド深度マップ)
+    """
     rows, cols = grid_size
 
-
-    """深度マップの可視化を行う"""
     try:
         if depth_map is None or depth_map.size == 0:
             logger.warning("Empty depth map received for visualization")
+            if return_grid_data:
+                return create_default_depth_image(), None
             return create_default_depth_image()
             
         # 深度マップの形状をログ出力
@@ -157,7 +171,10 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(1
                 # グリッド内の深度値を平均化
                 depth_conv[i, j] = np.mean(depth_feature[row_start:row_end, col_start:col_end])
 
+        # このdepth_convがグリッドの深度マップなので、これを保存する
+        depth_grid_map = depth_conv.copy()
 
+        # 以下、可視化用の処理
         # depth_convを正規化（無効値を除外）
         valid_depth = depth_conv[depth_conv > 0.01]
         if len(valid_depth) > 0:
@@ -222,14 +239,15 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(1
             x = j * cell_size
             cv2.line(output, (x, 0), (x, rows * cell_size), (50, 50, 50), 1)
 
-        return output  # 拡大されたグリッド画像を返す
+        if return_grid_data:
+            return output, depth_grid_map
+        return output  # 拡大されたグリッド画像のみ返す
         
     except Exception as e:
-        logger.error(f"Error in create_depth_visualization: {e}")
+        logger.error(f"Error in create_depth_grid_visualization: {e}")
         import traceback
         logger.error(traceback.format_exc())
         # エラー時はデフォルト画像を返す
+        if return_grid_data:
+            return create_default_depth_image(), None
         return create_default_depth_image()
-
-    
-    return output_with_colorbar
