@@ -8,6 +8,7 @@ from ..camera.capture import camera
 from ..visualization.streams import visualization
 from ..utils.stats import stats
 from .templates import get_index_html
+from .calibration_routes import calibration_router
 
 router = APIRouter()
 
@@ -94,3 +95,4 @@ async def calibration_status():
 def setup_routes(app: FastAPI):
     """FastAPIアプリにルートを設定する"""
     app.include_router(router)
+    app.include_router(calibration_router)  # キャリブレーションルータを追加

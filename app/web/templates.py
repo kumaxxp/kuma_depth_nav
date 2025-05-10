@@ -40,10 +40,12 @@ def get_index_html():
             <h3>Performance Stats</h3>
             <div id="stats-container">Loading stats...</div>
         </div>
-        
-        <div class="calibration-status">
+          <div class="calibration-status">
             <h3>Camera Calibration</h3>
             <div id="calibration-status">Loading calibration status...</div>
+            <div style="margin-top: 10px;">
+                <a href="/calibration" class="button" style="display: inline-block; padding: 8px 16px; background: #3498db; color: white; text-decoration: none; border-radius: 4px;">キャリブレーション管理ページへ</a>
+            </div>
         </div>
         
         <script>            // 2秒ごとに統計情報を更新
