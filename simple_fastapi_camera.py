@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 
 # Depth Anything用
 from depth_processor import DepthProcessor, create_depth_visualization, create_depth_grid_visualization
+# 天頂視点マップ用の関数をインポート
+from depth_processor import convert_to_absolute_depth, depth_to_point_cloud, create_top_down_occupancy_grid, visualize_occupancy_grid
 
 # FastAPIのライフサイクル管理を最新のasynccontextmanagerに変更
 @asynccontextmanager
@@ -105,7 +107,8 @@ fps_stats = {
     "camera": deque(maxlen=30),
     "depth": deque(maxlen=30),
     "grid": deque(maxlen=30),
-    "inference": deque(maxlen=30)
+    "inference": deque(maxlen=30),
+    "top_down": deque(maxlen=30)  # 天頂視点マップ用
 }
 last_frame_times = {
     "camera": 0,
@@ -332,6 +335,10 @@ async def index():
                 <h2>Depth Grid</h2>
                 <img src="/depth_grid" alt="Depth Grid" />
             </div>
+            <div class="video-box">
+                <h2>Top-Down View</h2>
+                <img src="/top_down_view" alt="Top-Down View" />
+            </div>
         </div>
         <div class="stats">
             <h3>Performance Stats</h3>
@@ -377,6 +384,10 @@ async def depth_video():
 @app.get("/depth_grid")
 async def depth_grid():
     return StreamingResponse(get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/top_down_view")
+async def top_down_view():
+    return StreamingResponse(get_top_down_view_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 def get_camera_stream():
     # ストリーム開始時のタイムスタンプをリセット
@@ -425,6 +436,98 @@ def get_camera_stream():
 
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         time.sleep(0.05)  # 20FPSに制限（0.02→0.05に変更）
+
+# 天頂視点マップ用のストリーム取得関数を追加
+def get_top_down_view_stream():
+    """天頂視点マップのストリームを提供する関数"""
+    # パフォーマンス測定用
+    last_frame_time = 0
+    fps_stats["top_down"] = deque(maxlen=30)
+    first_frame = True
+    
+    # 設定パラメータ
+    scaling_factor = 15.0  # 深度スケーリング係数 (README.mdに基づく)
+    grid_resolution = 0.1  # グリッドの解像度（メートル/セル）
+    grid_width = 100       # グリッドの幅（セル数）
+    grid_height = 100      # グリッドの高さ（セル数）
+    height_threshold = 0.3 # 通行可能と判定する高さの閾値（メートル）
+    
+    while True:
+        # 共有メモリからカメラフレームと深度マップを取得
+        with depth_map_lock:
+            if latest_depth_map is None or latest_camera_frame is None:
+                time.sleep(0.01)
+                continue
+            current_depth_map = latest_depth_map.copy()
+            current_frame = latest_camera_frame.copy()  # 現在のフレームも取得
+        
+        # 処理時間の計測を開始
+        start_time = time.perf_counter()
+        
+        try:
+            # 1. 相対深度マップを絶対深度マップ（メートル単位）に変換
+            absolute_depth = convert_to_absolute_depth(current_depth_map, scaling_factor)
+            
+            # 2. 深度マップから3D点群を生成
+            points = depth_to_point_cloud(absolute_depth)
+            
+            # 3. 点群から天頂視点の占有グリッドを生成
+            occupancy_grid = create_top_down_occupancy_grid(points, 
+                                                           grid_resolution, 
+                                                           grid_width, 
+                                                           grid_height, 
+                                                           height_threshold)
+            
+            # 4. 占有グリッドを可視化
+            top_down_view = visualize_occupancy_grid(occupancy_grid)
+            
+            # 処理時間の測定終了
+            vis_time = time.perf_counter() - start_time
+            visualization_times.append(vis_time)
+            
+            # FPS計算とテキスト表示
+            now = time.time()
+            if first_frame:
+                first_frame = False
+            elif (now - last_frame_time) < 0.5:  # 異常値フィルタリング
+                fps = 1.0 / (now - last_frame_time)
+                if fps < 200:  # さらに極端な値をフィルタリング
+                    fps_stats["top_down"].append(fps)
+            
+            last_frame_time = now
+            
+            # 情報表示を追加
+            if len(fps_stats["top_down"]) > 0:
+                avg_fps = sum(fps_stats["top_down"]) / len(fps_stats["top_down"])
+                cv2.putText(top_down_view, f"FPS: {avg_fps:.1f}", (10, 20), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(top_down_view, f"処理時間: {vis_time*1000:.1f}ms", (10, 40), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # スケール表示を追加（グリッド解像度を示す）
+            cv2.putText(top_down_view, f"1マス={grid_resolution*100:.0f}cm", 
+                       (10, top_down_view.shape[0] - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+            # リサイズして画面に合わせる
+            top_down_view = cv2.resize(top_down_view, (320, 320), interpolation=cv2.INTER_NEAREST)
+            
+        except Exception as e:
+            print(f"天頂視点マップ生成エラー: {e}")
+            # エラー時はグレーの画像を表示
+            top_down_view = np.ones((320, 320, 3), dtype=np.uint8) * 50
+            cv2.putText(top_down_view, "Error", (120, 160), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+        
+        # JPEG エンコード
+        enc_start = time.perf_counter()
+        ret, buffer = cv2.imencode('.jpg', top_down_view, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        encoding_times.append(time.perf_counter() - enc_start)
+        if not ret:
+            continue
+            
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        time.sleep(0.1)  # 10FPSに制限
 
 # 例外ハンドリングを強化
 @app.exception_handler(Exception)
