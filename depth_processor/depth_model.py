@@ -215,8 +215,10 @@ def convert_to_absolute_depth(depth_map, scaling_factor=15.0):
     absolute_depth = np.zeros_like(depth_map)
     
     # スケーリング係数を用いて相対深度から絶対深度を計算
-    # 深度値が大きいほど近いという判定に合わせるため、直接スケーリングする
-    # (元の実装: absolute_depth[valid_mask] = scaling_factor / depth_map[valid_mask])
-    absolute_depth[valid_mask] = depth_map[valid_mask] * scaling_factor
+    # 深度値が大きいほど近いという判定に合わせる
+    # depth_mapの中から最も大きな値をnear_pointとして取得
+    near_point = np.max(depth_map[valid_mask])
+
+    absolute_depth[valid_mask] = scaling_factor / depth_map[valid_mask] - near_point
     
     return absolute_depth
