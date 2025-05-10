@@ -176,8 +176,7 @@ class CalibrationApp:
         except Exception as e:
             print(f"比較ビュー作成エラー: {str(e)}")
             return False
-    
-    def apply_calibration_to_camera(self) -> bool:
+      def apply_calibration_to_camera(self) -> bool:
         """キャリブレーション結果をカメラキャプチャに適用します
         
         Returns:
@@ -185,6 +184,12 @@ class CalibrationApp:
         """
         if not self.calibration_success:
             self.status_text = "キャリブレーションが完了していません"
+            print("警告: キャリブレーションが完了していないため適用できません")
+            return False
+            
+        if self.calibration.camera_matrix is None or self.calibration.dist_coeffs is None:
+            self.status_text = "有効なキャリブレーションデータがありません"
+            print("警告: キャリブレーションデータが無効です")
             return False
             
         try:
@@ -192,9 +197,11 @@ class CalibrationApp:
             from ..camera.capture import camera
             camera.set_calibration(self.calibration)
             self.status_text = "キャリブレーションがカメラに適用されました"
+            print("情報: キャリブレーションがカメラに適用されました")
             return True
         except Exception as e:
             self.status_text = f"キャリブレーション適用エラー: {str(e)}"
+            print(f"エラー: キャリブレーション適用中に例外が発生しました: {str(e)}")
             return False
 
 # キャリブレーションアプリケーションを作成

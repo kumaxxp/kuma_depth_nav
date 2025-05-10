@@ -57,6 +57,15 @@ class CameraCapture:
         Args:
             calibration: カメラキャリブレーションインスタンス
         """
+        # キャリブレーションデータの検証
+        if calibration is None:
+            print("警告: キャリブレーションインスタンスがNoneです。キャリブレーションは適用されません。")
+            return
+            
+        if calibration.camera_matrix is None or calibration.dist_coeffs is None:
+            print("警告: キャリブレーションデータが無効です。キャリブレーションは適用されません。")
+            return
+            
         self.calibration = calibration
         self.use_calibration = True
         print("カメラキャリブレーションが適用されました")

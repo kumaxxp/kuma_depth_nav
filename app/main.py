@@ -3,7 +3,7 @@
 """
 import os
 import traceback
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
@@ -14,18 +14,40 @@ from .calibration.calibration import calibration
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """アプリケーションのライフサイクル管理"""
-    # 起動時の処理
+    """アプリケーションのライフサイクル管理"""    # 起動時の処理
     print("アプリケーション起動: カメラとスレッドを初期化します")
     # カメラと深度推論は既に初期化済み
     
+    # 必要なディレクトリを作成
+    for directory in ["calibration_data", "calibration_images", "calibration_results"]:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            print(f"ディレクトリを確認: {directory}")
+        except Exception as e:
+            print(f"ディレクトリ作成中のエラー ({directory}): {e}")
+    
     # キャリブレーションデータがあれば読み込む
-    calib_file = "calibration_data/calibration.json"
-    if os.path.exists(calib_file):
-        if calibration.load_calibration(calib_file):
-            print(f"キャリブレーションデータを読み込みました: {calib_file}")
-            # カメラにキャリブレーション適用
-            camera.set_calibration(calibration)
+    try:
+        calib_file = "calibration_data/calibration.json"
+        if os.path.exists(calib_file):
+            if calibration.load_calibration(calib_file):
+                print(f"キャリブレーションデータを読み込みました: {calib_file}")
+                # カメラにキャリブレーション適用
+                try:
+                    camera.set_calibration(calibration)
+                    print("キャリブレーションをカメラに適用しました")
+                except Exception as e:
+                    print(f"キャリブレーション適用中のエラー: {e}")
+                    print("キャリブレーションなしで続行します")
+            else:
+                print(f"警告: キャリブレーションデータの読み込みに失敗しました: {calib_file}")
+                print("キャリブレーションなしで続行します")
+        else:
+            print("情報: キャリブレーションデータが見つかりません。キャリブレーションなしで続行します")
+            print("キャリブレーションを実行するには、run_camera_calibration.py を使用してください")
+    except Exception as e:
+        print(f"キャリブレーション初期化中のエラー: {e}")
+        print("キャリブレーションなしで続行します")
     
     yield  # アプリケーション実行中
     

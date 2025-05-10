@@ -1,6 +1,7 @@
 """
 FastAPIのルート定義を管理するモジュール
 """
+import os
 from fastapi import FastAPI, APIRouter, Request
 from fastapi.responses import StreamingResponse, HTMLResponse
 from ..camera.capture import camera
@@ -29,6 +30,33 @@ async def depth_video():
 async def depth_grid():
     """深度グリッドストリームを返す"""
     return StreamingResponse(visualization.get_depth_grid_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@router.get("/calibration_status")
+async def calibration_status():
+    """キャリブレーションステータスを返す"""
+    from ..camera.capture import camera
+    from ..calibration.calibration import calibration
+    import datetime
+    
+    calib_file_exists = os.path.exists("calibration_data/calibration.json")
+    calibration_loaded = calibration.camera_matrix is not None and calibration.dist_coeffs is not None
+    
+    status = {
+        "calibrated": calibration_loaded,
+        "applied": camera.use_calibration,
+        "rms_error": calibration.rms_error if hasattr(calibration, 'rms_error') else 0.0,
+        "calibration_time": None
+    }
+    
+    # キャリブレーションファイルの最終更新日時を取得
+    if calib_file_exists:
+        try:
+            mtime = os.path.getmtime("calibration_data/calibration.json")
+            status["calibration_time"] = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+        except:
+            pass
+    
+    return status
 
 @router.get("/stats")
 async def get_stats():

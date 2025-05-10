@@ -159,8 +159,7 @@ class CameraCalibration:
         except Exception as e:
             print(f"保存エラー: {e}")
             return False
-    
-    def load_calibration(self, filepath: str = "calibration_data/calibration.json") -> bool:
+      def load_calibration(self, filepath: str = "calibration_data/calibration.json") -> bool:
         """保存されたキャリブレーション結果を読み込みます
 
         Args:
@@ -175,20 +174,34 @@ class CameraCalibration:
                 with open(filepath, 'r') as f:
                     data = json.load(f)
                 
+                # 必須フィールド
+                if "camera_matrix" not in data or "dist_coeffs" not in data:
+                    print(f"警告: キャリブレーションファイルに必須フィールドがありません: {filepath}")
+                    return False
+                    
                 self.camera_matrix = np.array(data["camera_matrix"], dtype=np.float32)
                 self.dist_coeffs = np.array(data["dist_coeffs"], dtype=np.float32)
-                self.frame_size = data["frame_size"]
-                self.chessboard_size = data["chessboard_size"]
-                self.square_size_mm = data["square_size_mm"]
-                self.rms_error = data["rms_error"]
+                
+                # オプションフィールド
+                self.frame_size = data.get("frame_size")
+                self.chessboard_size = data.get("chessboard_size", (10, 7))
+                self.square_size_mm = data.get("square_size_mm", 23.0)
+                self.rms_error = data.get("rms_error", 0.0)
                 
             elif filepath.endswith('.pkl'):
                 # 古いPickleフォーマットを処理
-                self.camera_matrix, self.dist_coeffs = pickle.load(open(filepath, "rb"))
+                try:
+                    self.camera_matrix, self.dist_coeffs = pickle.load(open(filepath, "rb"))
+                    self.rms_error = 0.0  # 古いフォーマットではRMS誤差が保存されていない
+                except Exception as pkl_err:
+                    print(f"Pickleファイル読み込みエラー: {pkl_err}")
+                    return False
                 
+            print(f"キャリブレーションデータを読み込みました: カメラ行列={self.camera_matrix.shape}, 歪み係数={self.dist_coeffs.shape}")
             return True
+            
         except Exception as e:
-            print(f"読み込みエラー: {e}")
+            print(f"キャリブレーション読み込みエラー: {e}")
             return False
     
     def undistort_image(self, image: np.ndarray) -> np.ndarray:
