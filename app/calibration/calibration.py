@@ -149,12 +149,11 @@ class CameraCalibration:
                 json.dump(calibration_data, f, indent=4)
             
             # 互換性のためにPickleファイルも保存
-            pickle_dir = os.path.dirname(filepath)
-            pickle.dump((self.camera_matrix, self.dist_coeffs), 
+            pickle_dir = os.path.dirname(filepath)            pickle.dump((self.camera_matrix, self.dist_coeffs), 
                       open(f"{pickle_dir}/calibration.pkl", "wb"))
             pickle.dump(self.camera_matrix, open(f"{pickle_dir}/cameraMatrix.pkl", "wb"))
             pickle.dump(self.dist_coeffs, open(f"{pickle_dir}/dist.pkl", "wb"))
-              return True
+            return True
         except Exception as e:
             print(f"保存エラー: {e}")
             return False
