@@ -201,6 +201,7 @@ class DepthProcessor:
             # グリッドサイズに合わせた空の配列を返すか、エラーを発生させる
             return np.zeros(grid_size, dtype=np.float32)
 
+        logger.debug(f"Input depth_map shape for grid compression: {depth_map.shape}")
         # 深度マップを2次元に変換
         if len(depth_map.shape) == 4:  # (1, H, W, 1) 形式
             depth_feature = depth_map.reshape(depth_map.shape[1:3])
@@ -217,6 +218,7 @@ class DepthProcessor:
 
         rows, cols = grid_size
         original_h, original_w = depth_feature.shape
+        logger.debug(f"Processed depth_feature shape: {(original_h, original_w)}, min: {np.min(depth_feature):.4f}, max: {np.max(depth_feature):.4f}, mean: {np.mean(depth_feature):.4f}")
 
         compressed_grid = np.zeros((rows, cols), dtype=np.float32)
 
@@ -233,6 +235,7 @@ class DepthProcessor:
                 else:
                     compressed_grid[r, c] = 0 # 有効な値がない場合は0
 
+        logger.debug(f"Output compressed_grid shape: {compressed_grid.shape}, min: {np.min(compressed_grid):.4f}, max: {np.max(compressed_grid):.4f}, mean: {np.mean(compressed_grid):.4f}")
         return compressed_grid
 
 def initialize_depth_model(model_path=None):
