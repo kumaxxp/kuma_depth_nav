@@ -4,6 +4,7 @@
 import cv2
 import time
 import threading
+from typing import Optional, Tuple
 from ..utils.stats import stats
 
 class CameraCapture:
@@ -23,6 +24,10 @@ class CameraCapture:
         self.latest_frame = None
         self.frame_timestamp = 0
         self.lock = threading.Lock()
+        
+        # カメラキャリブレーション関連
+        self.calibration = None
+        self.use_calibration = False
         
         # カメラを初期化
         self._initialize_camera()
@@ -46,6 +51,20 @@ class CameraCapture:
             raise RuntimeError("エラー: カメラに接続できません")
         else:
             print(f"カメラ接続成功: {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+      def set_calibration(self, calibration):
+        """カメラキャリブレーションを設定する
+        
+        Args:
+            calibration: カメラキャリブレーションインスタンス
+        """
+        self.calibration = calibration
+        self.use_calibration = True
+        print("カメラキャリブレーションが適用されました")
+    
+    def disable_calibration(self):
+        """カメラキャリブレーションを無効化する"""
+        self.use_calibration = False
+        print("カメラキャリブレーションが無効化されました")
     
     def _camera_capture_loop(self):
         """カメラキャプチャスレッドのメインループ"""
@@ -56,6 +75,10 @@ class CameraCapture:
             try:
                 ret, frame = self.cap.read()
                 if ret:
+                    # キャリブレーションが有効な場合は補正を適用
+                    if self.use_calibration and self.calibration is not None:
+                        frame = self.calibration.undistort_image(frame)
+                    
                     with self.lock:
                         self.latest_frame = frame.copy()
                         self.frame_timestamp = time.time()

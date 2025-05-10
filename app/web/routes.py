@@ -36,6 +36,33 @@ async def get_stats():
     # カメラからフレームタイムスタンプを取得して統計を計算
     return stats.get_stats_data(camera.frame_timestamp)
 
+@router.get("/calibration_status")
+async def calibration_status():
+    """キャリブレーション状態を取得するAPIエンドポイント"""
+    from ..calibration.calibration import calibration
+    
+    status = {
+        "calibrated": calibration.camera_matrix is not None,
+        "applied": camera.use_calibration,
+        "rms_error": calibration.rms_error if calibration.rms_error else 0,
+        "calibration_time": None
+    }
+    
+    # キャリブレーションデータがあれば追加情報を設定
+    if calibration.camera_matrix is not None:
+        import os
+        calib_file = "calibration_data/calibration.json"
+        if os.path.exists(calib_file):
+            import json
+            try:
+                with open(calib_file, 'r') as f:
+                    data = json.load(f)
+                    status["calibration_time"] = data.get("calibration_time")
+            except:
+                pass
+    
+    return status
+
 def setup_routes(app: FastAPI):
     """FastAPIアプリにルートを設定する"""
     app.include_router(router)
