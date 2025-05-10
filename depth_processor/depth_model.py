@@ -219,6 +219,6 @@ def convert_to_absolute_depth(depth_map, scaling_factor=15.0):
     # depth_mapの中から最も大きな値をnear_pointとして取得
     near_point = np.max(depth_map[valid_mask])
 
-    absolute_depth[valid_mask] = scaling_factor / depth_map[valid_mask] - near_point
+    absolute_depth[valid_mask] = scaling_factor / (depth_map[valid_mask] - near_point)
     
     return absolute_depth
