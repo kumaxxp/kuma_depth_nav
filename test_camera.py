@@ -83,7 +83,7 @@ def main():
                 else:
                     camera.set_calibration(calibration)
                     print("キャリブレーション: ON")
-      finally:
+    finally:
         print("\nテスト終了")
 
 if __name__ == "__main__":
