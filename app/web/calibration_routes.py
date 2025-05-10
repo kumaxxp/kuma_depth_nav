@@ -2,6 +2,10 @@
 キャリブレーション機能のWebルートを管理するモジュール
 """
 import os
+import cv2
+import time
+import numpy as np
+import io
 from fastapi import APIRouter, HTTPException, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from ..calibration.calibration import calibration
