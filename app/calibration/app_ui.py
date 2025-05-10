@@ -176,7 +176,7 @@ class CalibrationApp:
         except Exception as e:
             print(f"比較ビュー作成エラー: {str(e)}")
             return False
-      def apply_calibration_to_camera(self) -> bool:
+    def apply_calibration_to_camera(self) -> bool:
         """キャリブレーション結果をカメラキャプチャに適用します
         
         Returns:
