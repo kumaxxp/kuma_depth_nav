@@ -73,7 +73,7 @@ def main():
             print("キャリブレーションがカメラに適用されました")
         else:
             print("キャリブレーションの適用に失敗しました")
-      else:  # view mode
+    else:  # view mode
         # キャリブレーション効果を確認するためのライブビュー
         if not calibration_app.calibration_success:
             print("キャリブレーションデータが見つかりません。")
@@ -88,7 +88,7 @@ def main():
         
         print("ライブビューモード（スペースキーで補正モード切替、Escキーで終了）")
         print("補正モード: 0=補正なし, 1=補正あり, 2=比較ビュー")
-          while True:
+        while True:
             # カメラからフレームを取得
             frame, _ = camera.get_frame()
             if frame is None:
