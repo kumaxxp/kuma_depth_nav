@@ -14,7 +14,8 @@ from .calibration.calibration import calibration
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """アプリケーションのライフサイクル管理"""    # 起動時の処理
+    """アプリケーションのライフサイクル管理"""
+    # 起動時の処理
     print("アプリケーション起動: カメラとスレッドを初期化します")
     # カメラと深度推論は既に初期化済み
     

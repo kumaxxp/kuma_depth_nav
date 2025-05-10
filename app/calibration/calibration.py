@@ -147,9 +147,9 @@ class CameraCalibration:
             # JSONファイルとして保存
             with open(filepath, 'w') as f:
                 json.dump(calibration_data, f, indent=4)
-            
-            # 互換性のためにPickleファイルも保存
-            pickle_dir = os.path.dirname(filepath)            pickle.dump((self.camera_matrix, self.dist_coeffs), 
+              # 互換性のためにPickleファイルも保存
+            pickle_dir = os.path.dirname(filepath)
+            pickle.dump((self.camera_matrix, self.dist_coeffs), 
                       open(f"{pickle_dir}/calibration.pkl", "wb"))
             pickle.dump(self.camera_matrix, open(f"{pickle_dir}/cameraMatrix.pkl", "wb"))
             pickle.dump(self.dist_coeffs, open(f"{pickle_dir}/dist.pkl", "wb"))
