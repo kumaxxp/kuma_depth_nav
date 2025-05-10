@@ -185,6 +185,56 @@ class DepthProcessor:
         """モデルが利用可能かどうかを返す"""
         return self.model is not None
 
+    def compress_depth_to_grid(self, depth_map, grid_size=(16, 12)):
+        """
+        深度マップを指定されたグリッドサイズに圧縮します。
+
+        Args:
+            depth_map (numpy.ndarray): 入力深度マップ (H, W) または (1, H, W, 1)
+            grid_size (tuple): 圧縮後のグリッドサイズ (rows, cols)
+
+        Returns:
+            numpy.ndarray: 圧縮された深度グリッド (rows, cols)
+        """
+        if depth_map is None or depth_map.size == 0:
+            logger.warning("Empty depth map received for grid compression.")
+            # グリッドサイズに合わせた空の配列を返すか、エラーを発生させる
+            return np.zeros(grid_size, dtype=np.float32)
+
+        # 深度マップを2次元に変換
+        if len(depth_map.shape) == 4:  # (1, H, W, 1) 形式
+            depth_feature = depth_map.reshape(depth_map.shape[1:3])
+        elif len(depth_map.shape) == 3:  # (H, W, 1) または (1, H, W) 形式
+            if depth_map.shape[2] == 1:
+                depth_feature = depth_map.reshape(depth_map.shape[:2])
+            else: # (1, H, W)
+                depth_feature = depth_map.reshape(depth_map.shape[1:])
+        elif len(depth_map.shape) == 2: # (H,W)
+            depth_feature = depth_map
+        else:
+            logger.error(f"Unsupported depth map shape for grid compression: {depth_map.shape}")
+            return np.zeros(grid_size, dtype=np.float32)
+
+        rows, cols = grid_size
+        original_h, original_w = depth_feature.shape
+
+        compressed_grid = np.zeros((rows, cols), dtype=np.float32)
+
+        for r in range(rows):
+            for c in range(cols):
+                row_start = int(r * original_h / rows)
+                row_end = int((r + 1) * original_h / rows)
+                col_start = int(c * original_w / cols)
+                col_end = int((c + 1) * original_w / cols)
+
+                patch = depth_feature[row_start:row_end, col_start:col_end]
+                if patch.size > 0:
+                    compressed_grid[r, c] = np.mean(patch[patch > 0.01]) # 有効な深度値の平均
+                else:
+                    compressed_grid[r, c] = 0 # 有効な値がない場合は0
+
+        return compressed_grid
+
 def initialize_depth_model(model_path=None):
     """
     深度推定モデルを初期化する便利関数

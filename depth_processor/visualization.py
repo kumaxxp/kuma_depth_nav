@@ -116,12 +116,13 @@ def depth_to_color(depth_normalized):
     # HSVからBGRへの変換
     return cv2.cvtColor(np.uint8([[[hue, saturation, value]]]), cv2.COLOR_HSV2BGR)[0][0]
 
-def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(16, 12), 
+def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=None, grid_size=(16, 12), 
                                    max_distance=10.0, cell_size=60, return_grid_data=False):
     """
     深度マップのグリッド可視化を行う
     
     Args:
+        depth_processor: DepthProcessorのインスタンス
         depth_map: 深度マップ
         absolute_depth: 絶対深度マップ（オプション）
         grid_size: グリッドサイズ (cols, rows)
@@ -141,40 +142,20 @@ def create_depth_grid_visualization(depth_map, absolute_depth=None, grid_size=(1
                 return create_default_depth_image(), None
             return create_default_depth_image()
             
-        # 深度マップの形状をログ出力
-        logger.debug(f"Visualizing depth map with shape: {depth_map.shape}")
-        
-        # 深度マップを2次元に変換
-        if len(depth_map.shape) == 4:  # (1, H, W, 1) 形式
-            depth_feature = depth_map.reshape(depth_map.shape[1:3])
-        elif len(depth_map.shape) == 3:  # (H, W, 1) または (1, H, W) 形式
-            if depth_map.shape[2] == 1:
-                depth_feature = depth_map.reshape(depth_map.shape[:2])
-            else:
-                depth_feature = depth_map.reshape(depth_map.shape[1:])
-        else:
-            depth_feature = depth_map  # すでに2D
-            
-        # NaNやInfをチェックして置換
-        depth_feature = np.nan_to_num(depth_feature, nan=0.5, posinf=1.0, neginf=0.01)
+        # DepthProcessorを使用して深度マップをグリッドに圧縮
+        depth_grid_map = depth_processor.compress_depth_to_grid(depth_map, grid_size=grid_size)
+        rows, cols = grid_size # grid_sizeタプルのアンパックを修正
 
-        # depth_featureをgrid_sizeのサイズに畳み込んだdepth_convを作成
-        depth_conv = np.zeros((rows, cols), dtype=np.float32)
-        for i in range(rows):
-            for j in range(cols):
-                # 各グリッドの範囲を計算
-                row_start = int(i * depth_feature.shape[0] / rows)
-                row_end = int((i + 1) * depth_feature.shape[0] / rows)
-                col_start = int(j * depth_feature.shape[1] / cols)
-                col_end = int((j + 1) * depth_feature.shape[1] / cols)
+        if depth_grid_map is None or depth_grid_map.size == 0:
+            logger.warning("Failed to compress depth map to grid.")
+            if return_grid_data:
+                return create_default_depth_image(), None
+            return create_default_depth_image()
 
-                # グリッド内の深度値を平均化
-                depth_conv[i, j] = np.mean(depth_feature[row_start:row_end, col_start:col_end])
+        # depth_grid_map を depth_conv として使用 (以前のdepth_convの計算は不要になった)
+        depth_conv = depth_grid_map
 
-        # このdepth_convがグリッドの深度マップなので、これを保存する
-        depth_grid_map = depth_conv.copy()
-
-        # 以下、可視化用の処理
+        # 以下、可視化用の処理 (変更なし)
         # depth_convを正規化（無効値を除外）
         valid_depth = depth_conv[depth_conv > 0.01]
         if len(valid_depth) > 0:
