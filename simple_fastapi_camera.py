@@ -482,117 +482,117 @@ def get_top_down_view_stream():
     
     while True:
         current_grid_data = None
-        original_map_shape_for_grid = None # (H, W)
+        current_raw_depth_map = None # ★ 元の深度マップも取得するため追加
 
         with depth_map_lock:
-            if latest_depth_grid is not None and latest_depth_map is not None:
+            if latest_depth_grid is not None:
                 current_grid_data = latest_depth_grid.copy()
-                # latest_depth_map は圧縮前の形状情報を得るために使用
-                # (1, H, W, 1) or (H, W) or (H, W, 1)
-                if latest_depth_map.ndim == 4 and latest_depth_map.shape[0] == 1:
-                    original_map_shape_for_grid = latest_depth_map.shape[1:3] # (H, W)
-                elif latest_depth_map.ndim == 3 and latest_depth_map.shape[2] == 1:
-                    original_map_shape_for_grid = latest_depth_map.shape[:2] # (H, W)
-                elif latest_depth_map.ndim == 2:
-                    original_map_shape_for_grid = latest_depth_map.shape # (H, W)
-                else:
-                    print(f"警告: latest_depth_map の形状 {latest_depth_map.shape} が予期せぬ形式です。")
-                    original_map_shape_for_grid = (ORIGINAL_DEPTH_HEIGHT, ORIGINAL_DEPTH_WIDTH) # フォールバック
-            # latest_camera_frame はここでは直接使用しない
+            if latest_depth_map is not None: # ★ 元の深度マップも取得
+                current_raw_depth_map = latest_depth_map.copy()
 
-        if current_grid_data is None or original_map_shape_for_grid is None:
-            time.sleep(0.01) # データがまだない場合は待機
+        if current_grid_data is None or current_raw_depth_map is None:
+            time.sleep(0.01)
             continue
-        
-        # 処理時間の計測を開始
-        start_time = time.perf_counter()
-        
-        try:
-            original_h, original_w = original_map_shape_for_grid
-            
-            # デバッグ情報を出力
-            print(f"圧縮グリッド形状: {current_grid_data.shape}, 元の深度マップ形状参考: ({original_h}, {original_w})")
-            
-            # ★ 1. 圧縮グリッドデータを絶対深度に変換
-            absolute_depth_grid = convert_to_absolute_depth(current_grid_data, scaling_factor)
-            
-            # 2. (変更) 絶対深度グリッドデータから3D点群を生成
-            points = depth_to_point_cloud(
-                absolute_depth_grid, # ★ 変換後のグリッドを使用
-                fx=FX, fy=FY, cx=CX, cy=CY,
-                original_height=original_h,
-                original_width=original_w,
-                is_grid_data=True,
-                grid_rows=GRID_COMPRESSION_SIZE[0],
-                grid_cols=GRID_COMPRESSION_SIZE[1]
+
+        start_time_vis = time.perf_counter()
+
+        # 圧縮グリッドデータを絶対深度に変換
+        # 元の深度マップの形状から original_height と original_width を取得
+        # これは compress_depth_to_grid で使用された raw_depth_map の形状であるべき
+        # latest_depth_map が predict から返される raw_depth_map そのものであると仮定
+        original_height, original_width = current_raw_depth_map.shape[:2]
+
+        # convert_to_absolute_depth に渡すのは圧縮グリッドデータ
+        absolute_depth_grid = convert_to_absolute_depth(current_grid_data, depth_scale=1.0) # depth_scale は仮
+
+        # 点群生成 (圧縮グリッドから)
+        point_cloud = depth_to_point_cloud(
+            absolute_depth_grid,
+            fx=FX, fy=FY, cx=CX, cy=CY,
+            is_grid_data=True,
+            original_height=original_height, # 元の深度マップの高さ
+            original_width=original_width,   # 元の深度マップの幅
+            grid_rows=GRID_COMPRESSION_SIZE[0],
+            grid_cols=GRID_COMPRESSION_SIZE[1]
+        )
+
+        if point_cloud is None or point_cloud.size == 0:
+            # print(\"[TopDown] No point cloud generated or point cloud is empty.\")
+            vis_img = create_default_depth_image(width=320, height=240, text=\"No Point Cloud\")
+        else:
+            # print(f\"[TopDown] Point cloud generated with {point_cloud.shape[0]} points.\")
+            # 占有グリッド生成
+            occupancy_grid = create_top_down_occupancy_grid(
+                point_cloud,
+                grid_resolution=0.1, # 10cm per cell
+                grid_size_m=(10.0, 10.0) # 10m x 10m grid
             )
+            # print(f\"[TopDown] Occupancy grid created with shape: {occupancy_grid.shape}\")
+            # 占有グリッド視覚化 (スケールファクターを適用)
+            vis_img = visualize_occupancy_grid(occupancy_grid, scale_factor=3) # スケールを3に調整
+            # print(f\"[TopDown] Occupancy grid visualized with shape: {vis_img.shape}\")
+
+        if vis_img is None or len(vis_img.shape) < 2:
+            vis_img = create_default_depth_image(width=320, height=240)
+        elif len(vis_img.shape) == 2 or (len(vis_img.shape) == 3 and vis_img.shape[2] == 1):
+            vis_img = cv2.cvtColor(vis_img, cv2.COLOR_GRAY2BGR)
+
+        # 元のサイズに戻す (例: 320x240)
+        # visualize_occupancy_grid が返す画像のサイズは (grid_h * scale, grid_w * scale, 3)
+        # これを固定サイズにリサイズする
+        target_width = 320
+        target_height = 240
+        current_height, current_width = vis_img.shape[:2]
+
+        if current_height != target_height or current_width != target_width:
+            # アスペクト比を保ちつつリサイズし、中央に配置
+            aspect_ratio_vis = current_width / current_height
+            aspect_ratio_target = target_width / target_height
+
+            if aspect_ratio_vis > aspect_ratio_target: # 横長の画像をターゲットに合わせる
+                new_width = target_width
+                new_height = int(target_width / aspect_ratio_vis)
+            else: # 縦長の画像をターゲットに合わせる
+                new_height = target_height
+                new_width = int(target_height * aspect_ratio_vis)
             
-            # 点群データの情報をログ出力
-            print(f"点群データサイズ: {points.shape if hasattr(points, 'shape') else 'None'}")
-            if points.size == 0:
-                # 点がない場合は空のグリッドを使用
-                print("警告: 生成された点群が空です")
-                occupancy_grid = np.zeros((grid_height, grid_width), dtype=np.uint8)
-            else:
-                # 3. 点群から天頂視点の占有グリッドを生成 (変更なし)
-                occupancy_grid = create_top_down_occupancy_grid(points, 
-                                                               grid_resolution, 
-                                                               grid_width, 
-                                                               grid_height, 
-                                                               height_threshold)
+            resized_vis = cv2.resize(vis_img, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
             
-            # 4. 占有グリッドを可視化 (変更なし)
-            top_down_view = visualize_occupancy_grid(occupancy_grid)
-            
-            # 処理時間の測定終了
-            vis_time = time.perf_counter() - start_time
-            visualization_times.append(vis_time)
-            
-            # FPS計算とテキスト表示
-            now = time.time()
-            if first_frame:
-                first_frame = False
-            elif (now - last_frame_time) < 0.5:  # 異常値フィルタリング
-                fps = 1.0 / (now - last_frame_time)
-                if fps < 200:  # さらに極端な値をフィルタリング
-                    fps_stats["top_down"].append(fps)
-            
-            last_frame_time = now
-            
-            # 情報表示を追加
-            if len(fps_stats["top_down"]) > 0:
-                avg_fps = sum(fps_stats["top_down"]) / len(fps_stats["top_down"])
-                cv2.putText(top_down_view, f"FPS: {avg_fps:.1f}", (10, 20), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.putText(top_down_view, f"処理時間: {vis_time*1000:.1f}ms", (10, 40), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            # スケール表示を追加（グリッド解像度を示す）
-            cv2.putText(top_down_view, f"1マス={grid_resolution*100:.0f}cm", 
-                       (10, top_down_view.shape[0] - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            # 黒い背景を作成し、中央に配置
+            final_vis_img = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+            x_offset = (target_width - new_width) // 2
+            y_offset = (target_height - new_height) // 2
+            final_vis_img[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = resized_vis
+            vis_img = final_vis_img
         
-            # リサイズして画面に合わせる
-            top_down_view = cv2.resize(top_down_view, (320, 320), interpolation=cv2.INTER_NEAREST)
+        visualization_times.append(time.perf_counter() - start_time_vis)
+
+        # FPS計算とテキスト表示
+        now = time.time()
+        if last_frame_times.get("top_down", 0) > 0: # last_frame_times に "top_down" がなければ初期化
+            fps = 1.0 / (now - last_frame_times["top_down"])
+            fps_stats["top_down"].append(fps)
+        last_frame_times["top_down"] = now
+
+        if len(fps_stats["top_down"]) > 0:
+            avg_fps = sum(fps_stats["top_down"]) / len(fps_stats["top_down"])
+            cv2.putText(vis_img, f"FPS: {avg_fps:.1f}", (10, 20), # Y座標を調整
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1) # フォントスケールと太さを調整
             
-        except Exception as e:
-            print(f"天頂視点マップ生成エラー: {e}")
-            import traceback
-            print(traceback.format_exc())
-            # エラー時はグレーの画像を表示
-            top_down_view = np.ones((320, 320, 3), dtype=np.uint8) * 50
-            cv2.putText(top_down_view, "Error", (120, 160), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-        
+            with depth_map_lock: # 遅延表示のためにロックを取得
+                delay = (time.time() - frame_timestamp) * 1000 if frame_timestamp > 0 else 0
+            cv2.putText(vis_img, f"Delay: {delay:.1f}ms", (10, 40), # Y座標を調整
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1) # フォントスケールと太さを調整
+
         # JPEG エンコード
-        enc_start = time.perf_counter()
-        ret, buffer = cv2.imencode('.jpg', top_down_view, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        encoding_times.append(time.perf_counter() - enc_start)
+        start_time_encode = time.perf_counter()
+        ret, buffer = cv2.imencode('.jpg', vis_img, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        encoding_times.append(time.perf_counter() - start_time_encode)
         if not ret:
             continue
-            
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.1)  # 10FPSに制限
+
+        yield (b'--frame\\r\\nContent-Type: image/jpeg\\r\\n\\r\\n' + buffer.tobytes() + b'\\r\\n')
+        time.sleep(0.03) # 33 FPS 程度
 
 # 例外ハンドリングを強化
 @app.exception_handler(Exception)

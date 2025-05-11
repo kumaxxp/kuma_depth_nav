@@ -150,46 +150,71 @@ def create_top_down_occupancy_grid(points, grid_resolution=GRID_RESOLUTION,
     
     return grid
 
-def visualize_occupancy_grid(occupancy_grid):
+def visualize_occupancy_grid(occupancy_grid, scale_factor=5):
     """
     占有グリッドを視覚化する関数
     Args:
         occupancy_grid: 占有グリッド（0=不明、1=障害物、2=通行可能）
+        scale_factor: 表示を拡大する係数
     Returns:
         可視化された画像
     """
     # グリッドのサイズ
     grid_h, grid_w = occupancy_grid.shape
     
+    scaled_h = grid_h * scale_factor
+    scaled_w = grid_w * scale_factor
+    
     # 表示用のキャンバスを作成（RGB）
-    visualization = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+    visualization = np.zeros((scaled_h, scaled_w, 3), dtype=np.uint8)
     
-    # 障害物（値が1のセル）は赤色で表示
-    visualization[occupancy_grid == 1] = [0, 0, 255]  # 赤色
+    # 色の定義 (BGR)
+    colors = {
+        0: [0, 255, 255],  # 不明領域: 黄色
+        1: [0, 0, 255],    # 障害物: 赤色
+        2: [0, 100, 0]     # 通行可能: 緑色
+    }
     
-    # 通行可能（値が2のセル）は緑色で表示
-    visualization[occupancy_grid == 2] = [0, 100, 0]  # 緑色
-    
-    # 不明領域（値が0のセル）はグレーで表示
-    visualization[occupancy_grid == 0] = [80, 80, 80]  # グレー
-    
+    for r in range(grid_h):
+        for c in range(grid_w):
+            color = colors.get(occupancy_grid[r, c], [80, 80, 80]) # デフォルトはグレー
+            cv2.rectangle(visualization,
+                          (c * scale_factor, r * scale_factor),
+                          ((c + 1) * scale_factor -1 , (r + 1) * scale_factor -1),
+                          color,
+                          -1)
+
     # 中央に車両位置を示す点を描画
-    center_x, center_y = grid_w // 2, grid_h - 20
-    cv2.circle(visualization, (center_x, center_y), 5, [255, 255, 255], -1)
+    # 元のグリッドでの中心位置
+    orig_center_x, orig_center_y = grid_w // 2, grid_h - 10 # y座標を少し調整して中央寄りに
     
-    # グリッド線を描画（10セルごと）
-    for i in range(0, grid_h, 10):
-        cv2.line(visualization, (0, i), (grid_w, i), [50, 50, 50], 1)
-    for j in range(0, grid_w, 10):
-        cv2.line(visualization, (j, 0), (j, grid_h), [50, 50, 50], 1)
+    # スケール後の中心位置 (セルの中心になるように調整)
+    center_x = orig_center_x * scale_factor + scale_factor // 2
+    center_y = orig_center_y * scale_factor + scale_factor // 2
     
+    marker_radius = 3 * scale_factor # マーカーの半径もスケール
+    cv2.circle(visualization, (center_x, center_y), marker_radius, [255, 255, 255], -1)
+    
+    # グリッド線を描画（元の10セルごと、スケール後）
+    line_color = [50, 50, 50]
+    line_thickness = 1
+    for i in range(0, grid_h + 1, 10): # +1 して最後の線も描画
+        y = i * scale_factor
+        cv2.line(visualization, (0, y), (scaled_w, y), line_color, line_thickness)
+    for j in range(0, grid_w + 1, 10): # +1 して最後の線も描画
+        x = j * scale_factor
+        cv2.line(visualization, (x, 0), (x, scaled_h), line_color, line_thickness)
+        
     # 前方向を示す矢印を描画
-    cv2.arrowedLine(visualization, 
-                   (center_x, center_y),  # 始点
-                   (center_x, center_y - 50),  # 終点
-                   [255, 255, 255],  # 色
-                   2,  # 線の太さ
-                   tipLength=0.2)  # 矢印の先端の長さ
+    arrow_length = 10 * scale_factor # 元のグリッドで10セル分の長さ
+    arrow_thickness = max(1, scale_factor // 2) # 太さもスケール
+    
+    cv2.arrowedLine(visualization,
+                   (center_x, center_y),
+                   (center_x, center_y - arrow_length),
+                   [255, 255, 255],
+                   arrow_thickness,
+                   tipLength=0.3)
     
     return visualization
 
