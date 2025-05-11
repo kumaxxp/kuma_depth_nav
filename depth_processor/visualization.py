@@ -8,16 +8,16 @@ import logging
 
 # ロガーの取得
 logger = logging.getLogger("kuma_depth_nav.visualization")
-
-def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
-    """深度マップの可視化を行う"""
-    try:
-        if depth_map is None or depth_map.size == 0:
-            logger.warning("Empty depth map received for visualization")
-            return create_default_depth_image(
-                640 if original_shape is None else original_shape[1],
-                480 if original_shape is None else original_shape[0]
-            )
+# --- ここから追加 ---
+# logger のレベルを DEBUG に設定
+logger.setLevel(logging.DEBUG)
+# ハンドラが設定されていなければ、標準出力へのハンドラを追加
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+# --- ここまで追加 ---
             
         # 深度マップの形状をログ出力
         logger.debug(f"Visualizing depth map with shape: {depth_map.shape}")
