@@ -12,58 +12,87 @@ GRID_HEIGHT = 100       # 縦方向のセル数
 HEIGHT_THRESHOLD = 0.3  # 通行可能と判定する高さの閾値（メートル）
 MAX_DEPTH = 6.0         # 最大深度（メートル）
 
-def depth_to_point_cloud(depth_map, fx=500, fy=500, cx=None, cy=None):
+def depth_to_point_cloud(depth_data, fx, fy, cx, cy,
+                         original_height=None, original_width=None,
+                         is_grid_data=False, grid_rows=None, grid_cols=None):
     """
-    深度マップから3D点群を生成する
-    
+    深度データから3D点群を生成します。
+    高解像度深度マップと圧縮グリッドデータの両方に対応します。
+
     Args:
-        depth_map: 深度マップ（各ピクセルの深度値を含む2D配列）
-        fx, fy: カメラの焦点距離（ピクセル単位）
-        cx, cy: カメラの光学中心（指定しない場合は画像の中心）
-        
+        depth_data (numpy.ndarray): 深度データ。フル解像度マップまたは圧縮グリッド。
+        fx (float): カメラの水平方向の焦点距離。
+        fy (float): カメラの垂直方向の焦点距離。
+        cx (float): カメラの水平方向の光学中心。
+        cy (float): カメラの垂直方向の光学中心。
+        original_height (int, optional): グリッドデータの場合の元の深度マップの高さ。
+        original_width (int, optional): グリッドデータの場合の元の深度マップの幅。
+        is_grid_data (bool): Trueの場合、depth_dataを圧縮グリッドとして処理。
+        grid_rows (int, optional): グリッドデータの場合の行数。
+        grid_cols (int, optional): グリッドデータの場合の列数。
+
     Returns:
-        points: N×3の点群配列（N=ピクセル数）
+        numpy.ndarray: (N, 3)形状の点群データ。各点は[x, y, z]。
+                       無効な点や点がない場合は空の配列。
     """
-    # 深度マップの形状確認と調整
-    if len(depth_map.shape) > 2:
-        # 3D以上の場合は最初の2次元のみ使用
-        depth_map = depth_map[:, :, 0]  # 最初のチャンネルのみを使用
+    points = []
+    if is_grid_data:
+        if not (original_height and original_width and grid_rows and grid_cols and
+                grid_rows > 0 and grid_cols > 0): # grid_rows/cols > 0 を追加
+            # logger.error("For grid data, valid original_height, original_width, grid_rows, and grid_cols must be provided.")
+            # print("Error: For grid data, valid original_height, original_width, grid_rows, and grid_cols must be provided.")
+            raise ValueError("For grid data, valid original_height, original_width, grid_rows, and grid_cols must be provided.")
+        
+        # depth_data はこの場合 compressed_grid (grid_rows, grid_cols)
+        for r_idx in range(grid_rows):
+            for c_idx in range(grid_cols):
+                depth_value = depth_data[r_idx, c_idx]
+                
+                # 無効な深度値はスキップ (0または非常に小さい値)
+                if depth_value <= 1e-5: 
+                    continue
+
+                # グリッドセルに対応する元の画像上の中心ピクセル座標を計算
+                # (u, v)座標系で、uが列方向(width)、vが行方向(height)
+                u_center = (c_idx + 0.5) * (original_width / grid_cols)
+                v_center = (r_idx + 0.5) * (original_height / grid_rows)
+                
+                # 3D座標を計算 (カメラ座標系: x右, y下, z前)
+                x = (u_center - cx) * depth_value / fx
+                y = (v_center - cy) * depth_value / fy
+                z = depth_value
+                points.append([x, y, z])
+        
+        if not points:
+            return np.empty((0, 3), dtype=np.float32)
+        return np.array(points, dtype=np.float32)
     
-    height, width = depth_map.shape
-    
-    # 画像中心を設定
-    if cx is None:
-        cx = width / 2
-    if cy is None:
-        cy = height / 2
-    
-    # 各ピクセルに対して座標を計算
-    x_indices, y_indices = np.meshgrid(
-        np.arange(width), np.arange(height)
-    )
-    
-    # ピクセル座標をカメラ座標系に変換
-    normalized_x = (x_indices - cx) / fx
-    normalized_y = (y_indices - cy) / fy
-    
-    # 3D点座標を計算 (x, y, z)
-    # カメラ座標系: Z が前方、X が右、Y が下方向
-    x = normalized_x * depth_map
-    y = normalized_y * depth_map
-    z = depth_map
-    
-    # 無効な深度値（ゼロや非常に大きい値）をマスク
-    valid_mask = (z > 0.1) & (z < MAX_DEPTH)
-    
-    # 点群データを形成
-    x_valid = x[valid_mask]
-    y_valid = y[valid_mask]
-    z_valid = z[valid_mask]
-    
-    # (N, 3) 形式の点群データを返す
-    points = np.vstack((x_valid, y_valid, z_valid)).T
-    
-    return points
+    else:
+        # フル解像度深度マップの処理 (ベクトル化)
+        if depth_data is None or depth_data.ndim != 2:
+            # print("Error: Full resolution depth_data must be a 2D numpy array.")
+            raise ValueError("Full resolution depth_data must be a 2D numpy array.")
+
+        h, w = depth_data.shape
+        if h == 0 or w == 0:
+            return np.empty((0,3), dtype=np.float32)
+
+        v_coords, u_coords = np.indices((h, w)) # vが行インデックス, uが列インデックス
+
+        valid_mask = depth_data > 1e-5  # 有効な深度点のみを対象
+
+        z_values = depth_data[valid_mask]
+        if z_values.size == 0:
+            return np.empty((0,3), dtype=np.float32)
+
+        u_values = u_coords[valid_mask]
+        v_values = v_coords[valid_mask]
+
+        x_cam = (u_values - cx) * z_values / fx
+        y_cam = (v_values - cy) * z_values / fy
+        
+        # (N, 3) の形状でスタック
+        return np.stack((x_cam, y_cam, z_values), axis=-1)
 
 def create_top_down_occupancy_grid(points, grid_resolution=GRID_RESOLUTION, 
                                   grid_width=GRID_WIDTH, grid_height=GRID_HEIGHT, 
