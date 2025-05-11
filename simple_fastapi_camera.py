@@ -517,10 +517,10 @@ def get_top_down_view_stream():
         )
 
         if point_cloud is None or point_cloud.size == 0:
-            # print(\"[TopDown] No point cloud generated or point cloud is empty.\")
-            vis_img = create_default_depth_image(width=320, height=240, text=\"No Point Cloud\")
+            # print(\\\"[TopDown] No point cloud generated or point cloud is empty.\\\"\")
+            vis_img = create_default_depth_image(width=320, height=240, text="No Point Cloud")
         else:
-            # print(f\"[TopDown] Point cloud generated with {point_cloud.shape[0]} points.\")
+            # print(f\\\"[TopDown] Point cloud generated with {point_cloud.shape[0]} points.\\\"\")
             # 占有グリッド生成
             occupancy_grid = create_top_down_occupancy_grid(
                 point_cloud,
