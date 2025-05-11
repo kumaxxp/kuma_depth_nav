@@ -145,23 +145,23 @@ def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=N
         グリッド可視化画像、またはタプル (画像, グリッド深度マップ)
     """
     rows, cols = grid_size
-    logger.debug(f"[GRID_VIS] Entered create_depth_grid_visualization. depth_map shape: {depth_map.shape if depth_map is not None else 'None'}, grid_size: {grid_size}")
+    # logger.debug(f"[GRID_VIS] Entered create_depth_grid_visualization. depth_map shape: {depth_map.shape if depth_map is not None else 'None'}, grid_size: {grid_size}")
 
     try:
         if depth_map is None or depth_map.size == 0:
-            logger.warning("[GRID_VIS] Empty depth map received.")
+            logger.warning("Empty depth map received for grid visualization.") # [GRID_VIS] プレフィックスを削除
             if return_grid_data:
                 return create_default_depth_image(), None
             return create_default_depth_image()
             
-        logger.debug("[GRID_VIS] Calling depth_processor.compress_depth_to_grid...")
+        # logger.debug("[GRID_VIS] Calling depth_processor.compress_depth_to_grid...")
         # DepthProcessorを使用して深度マップをグリッドに圧縮
         depth_grid_map = depth_processor.compress_depth_to_grid(depth_map, grid_size=grid_size)
-        logger.debug(f"[GRID_VIS] compress_depth_to_grid returned. depth_grid_map shape: {depth_grid_map.shape if depth_grid_map is not None else 'None'}")
+        # logger.debug(f"[GRID_VIS] compress_depth_to_grid returned. depth_grid_map shape: {depth_grid_map.shape if depth_grid_map is not None else 'None'}")
         rows, cols = grid_size # grid_sizeタプルのアンパックを修正
 
         if depth_grid_map is None or depth_grid_map.size == 0:
-            logger.warning("[GRID_VIS] Failed to compress depth map to grid or got empty grid.")
+            logger.warning("Failed to compress depth map to grid or got empty grid.") # [GRID_VIS] プレフィックスを削除
             if return_grid_data:
                 return create_default_depth_image(), None
             return create_default_depth_image()
@@ -176,11 +176,11 @@ def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=N
             min_depth = np.percentile(valid_depth, 5)  # 外れ値を除外
             max_depth = np.percentile(valid_depth, 95) # 外れ値を除外
         else:
-            logger.warning("No valid depth values found")
+            logger.warning("No valid depth values found in depth_conv for grid visualization") # メッセージを少し変更
             min_depth = 0.1
             max_depth = 0.9
 
-        logger.debug(f"Using depth range for normalization: {min_depth:.4f} to {max_depth:.4f}")
+        # logger.debug(f"Using depth range for normalization: {min_depth:.4f} to {max_depth:.4f}") # このデバッグログは残しても良いかもしれないが、一旦削除
 
         # 正規化して0-1範囲にする
         normalized = np.zeros_like(depth_conv, dtype=np.float32)
@@ -235,13 +235,13 @@ def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=N
             cv2.line(output, (x, 0), (x, rows * cell_size), (50, 50, 50), 1)
 
         if return_grid_data:
-            logger.debug("[GRID_VIS] Returning image and depth_grid_map.")
+            # logger.debug("[GRID_VIS] Returning image and depth_grid_map.")
             return output, depth_grid_map
-        logger.debug("[GRID_VIS] Returning image only.")
+        # logger.debug("[GRID_VIS] Returning image only.")
         return output  # 拡大されたグリッド画像のみ返す
         
     except Exception as e:
-        logger.error(f"[GRID_VIS] Error in create_depth_grid_visualization: {e}")
+        logger.error(f"Error in create_depth_grid_visualization: {e}") # [GRID_VIS] プレフィックスを削除
         import traceback
         logger.error(traceback.format_exc())
         # エラー時はデフォルト画像を返す

@@ -206,47 +206,72 @@ class DepthProcessor:
         Returns:
             numpy.ndarray: 圧縮された深度グリッド (rows, cols)
         """
-        if depth_map is None or depth_map.size == 0:
-            logger.warning("Empty depth map received for grid compression.")
-            # グリッドサイズに合わせた空の配列を返すか、エラーを発生させる
-            return np.zeros(grid_size, dtype=np.float32)
+        try:
+            if depth_map is None or depth_map.size == 0:
+                logger.warning("Cannot compress empty depth map.")
+                return None
 
-        logger.debug(f"Input depth_map shape for grid compression: {depth_map.shape}")
-        # 深度マップを2次元に変換
-        if len(depth_map.shape) == 4:  # (1, H, W, 1) 形式
-            depth_feature = depth_map.reshape(depth_map.shape[1:3])
-        elif len(depth_map.shape) == 3:  # (H, W, 1) または (1, H, W) 形式
-            if depth_map.shape[2] == 1:
+            # 深度マップを2Dに整形
+            if len(depth_map.shape) == 4:  # (1, H, W, 1)
+                depth_feature = depth_map.reshape(depth_map.shape[1:3])
+            elif len(depth_map.shape) == 3:  # (H, W, 1)
                 depth_feature = depth_map.reshape(depth_map.shape[:2])
-            else: # (1, H, W)
-                depth_feature = depth_map.reshape(depth_map.shape[1:])
-        elif len(depth_map.shape) == 2: # (H,W)
-            depth_feature = depth_map
-        else:
-            logger.error(f"Unsupported depth map shape for grid compression: {depth_map.shape}")
-            return np.zeros(grid_size, dtype=np.float32)
+            elif len(depth_map.shape) == 2:  # (H, W)
+                depth_feature = depth_map
+            else:
+                logger.error(f"Unsupported depth_map shape: {depth_map.shape}")
+                return None
+            
+            # NaNやInfをチェックして置換 (圧縮前に実施)
+            depth_feature = np.nan_to_num(depth_feature, nan=0.0, posinf=0.0, neginf=0.0) # 無効値は0として扱う
 
-        rows, cols = grid_size
-        original_h, original_w = depth_feature.shape
-        logger.debug(f"Processed depth_feature shape: {(original_h, original_w)}, min: {np.min(depth_feature):.4f}, max: {np.max(depth_feature):.4f}, mean: {np.mean(depth_feature):.4f}")
+            original_h, original_w = depth_feature.shape
+            grid_rows, grid_cols = grid_size
 
-        compressed_grid = np.zeros((rows, cols), dtype=np.float32)
+            if grid_rows <= 0 or grid_cols <= 0:
+                logger.error(f"Invalid grid_size: {grid_size}. Dimensions must be positive.")
+                return None
 
-        for r in range(rows):
-            for c in range(cols):
-                row_start = int(r * original_h / rows)
-                row_end = int((r + 1) * original_h / rows)
-                col_start = int(c * original_w / cols)
-                col_end = int((c + 1) * original_w / cols)
+            compressed_grid = np.zeros(grid_size, dtype=np.float32)
 
-                patch = depth_feature[row_start:row_end, col_start:col_end]
-                if patch.size > 0:
-                    compressed_grid[r, c] = np.mean(patch[patch > 0.01]) # 有効な深度値の平均
-                else:
-                    compressed_grid[r, c] = 0 # 有効な値がない場合は0
+            cell_h = original_h / grid_rows
+            cell_w = original_w / grid_cols
 
-        logger.debug(f"Output compressed_grid shape: {compressed_grid.shape}, min: {np.min(compressed_grid):.4f}, max: {np.max(compressed_grid):.4f}, mean: {np.mean(compressed_grid):.4f}")
-        return compressed_grid
+            for r in range(grid_rows):
+                for c in range(grid_cols):
+                    y_start = int(r * cell_h)
+                    y_end = int((r + 1) * cell_h)
+                    x_start = int(c * cell_w)
+                    x_end = int((c + 1) * cell_w)
+
+                    # 範囲が画像サイズを超えないようにクリップ
+                    y_start = np.clip(y_start, 0, original_h)
+                    y_end = np.clip(y_end, 0, original_h)
+                    x_start = np.clip(x_start, 0, original_w)
+                    x_end = np.clip(x_end, 0, original_w)
+                    
+                    if y_start >= y_end or x_start >= x_end:
+                        # セルのサイズが0または負になる場合 (グリッドが細かすぎるなど)
+                        compressed_grid[r, c] = 0 # または他の適切なデフォルト値
+                        continue
+
+                    cell_depth_values = depth_feature[y_start:y_end, x_start:x_end]
+                    
+                    # 有効な深度値のみを対象とする (0より大きい値)
+                    valid_depths = cell_depth_values[cell_depth_values > 1e-5] # 小さな閾値より大きいもの
+                    
+                    if valid_depths.size > 0:
+                        compressed_grid[r, c] = np.mean(valid_depths)
+                    else:
+                        compressed_grid[r, c] = 0 # 有効な深度がない場合は0（または他の適切な値）
+            
+            return compressed_grid
+
+        except Exception as e:
+            logger.error(f"Error in compress_depth_to_grid: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
 
 def initialize_depth_model(model_path=None):
     """
