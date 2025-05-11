@@ -234,7 +234,8 @@ def get_depth_grid_stream():
 
         # グリッドの可視化
         start_time = time.perf_counter()
-        grid_img, depth_grid_map = create_depth_grid_visualization(current_depth_map, grid_size=(12, 16), cell_size=20, return_grid_data=True)
+        # depth_processor インスタンスを渡すように修正
+        grid_img, depth_grid_map = create_depth_grid_visualization(depth_processor, current_depth_map, grid_size=(12, 16), cell_size=20, return_grid_data=True)
         if grid_img is None or len(grid_img.shape) < 2:
             grid_img = 128 * np.ones((240, 320, 3), dtype=np.uint8)
         elif len(grid_img.shape) == 2 or (len(grid_img.shape) == 3 and grid_img.shape[2] == 1):
