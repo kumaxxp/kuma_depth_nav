@@ -17,6 +17,7 @@ if not logger.hasHandlers():
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+logger.info("Logger for 'kuma_depth_nav.visualization' INITIALIZED. This message should appear if the module is imported and logger is working.")
 # --- ここまで追加 ---
 
 def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
