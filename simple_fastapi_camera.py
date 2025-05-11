@@ -491,8 +491,13 @@ def get_top_down_view_stream():
                 current_raw_depth_map = latest_depth_map.copy()
 
         if current_grid_data is None or current_raw_depth_map is None:
+            print("[TopDownStream] Waiting for grid or raw depth map...") # DEBUG
             time.sleep(0.01)
             continue
+        
+        # DEBUG: Print shape of initial data
+        print(f"[TopDownStream] current_grid_data shape: {current_grid_data.shape}, current_raw_depth_map shape: {current_raw_depth_map.shape}")
+
 
         start_time_vis = time.perf_counter()
 
@@ -504,6 +509,13 @@ def get_top_down_view_stream():
 
         # convert_to_absolute_depth に渡すのは圧縮グリッドデータ
         absolute_depth_grid = convert_to_absolute_depth(current_grid_data, depth_scale=1.0) # depth_scale は仮
+        
+        # DEBUG: Print info about absolute_depth_grid
+        if absolute_depth_grid is not None:
+            print(f"[TopDownStream] absolute_depth_grid shape: {absolute_depth_grid.shape}, min: {np.min(absolute_depth_grid)}, max: {np.max(absolute_depth_grid)}")
+        else:
+            print("[TopDownStream] absolute_depth_grid is None")
+
 
         # 点群生成 (圧縮グリッドから)
         point_cloud = depth_to_point_cloud(
@@ -516,27 +528,49 @@ def get_top_down_view_stream():
             grid_cols=GRID_COMPRESSION_SIZE[1]
         )
 
+        # DEBUG: Print info about point_cloud
+        if point_cloud is not None and point_cloud.size > 0:
+            print(f"[TopDownStream] point_cloud shape: {point_cloud.shape}, first 3 points: \n{point_cloud[:3]}")
+        elif point_cloud is not None:
+            print("[TopDownStream] point_cloud is empty")
+        else:
+            print("[TopDownStream] point_cloud is None")
+
+
         if point_cloud is None or point_cloud.size == 0:
-            # print(\\\"[TopDown] No point cloud generated or point cloud is empty.\\\"\")
+            print("[TopDownStream] No point cloud generated or point cloud is empty.")
             vis_img = create_default_depth_image(width=320, height=240, text="No Point Cloud")
         else:
-            # print(f\\\"[TopDown] Point cloud generated with {point_cloud.shape[0]} points.\\\"\")
+            print(f"[TopDownStream] Point cloud generated with {point_cloud.shape[0]} points.")
             # 占有グリッド生成
             occupancy_grid = create_top_down_occupancy_grid(
                 point_cloud,
                 grid_resolution=0.1, # 10cm per cell
                 grid_size_m=(10.0, 10.0) # 10m x 10m grid
             )
-            # print(f\"[TopDown] Occupancy grid created with shape: {occupancy_grid.shape}\")
+            # DEBUG: Print info about occupancy_grid
+            if occupancy_grid is not None:
+                print(f"[TopDownStream] occupancy_grid shape: {occupancy_grid.shape}, unique values: {np.unique(occupancy_grid, return_counts=True)}")
+            else:
+                print("[TopDownStream] occupancy_grid is None")
+
+            # print(f"[TopDown] Occupancy grid created with shape: {occupancy_grid.shape}")
             # 占有グリッド視覚化 (スケールファクターを適用)
             vis_img = visualize_occupancy_grid(occupancy_grid, scale_factor=3) # スケールを3に調整
-            # print(f\"[TopDown] Occupancy grid visualized with shape: {vis_img.shape}\")
+            # print(f"[TopDown] Occupancy grid visualized with shape: {vis_img.shape}")
+            # DEBUG: Print info about vis_img after visualize_occupancy_grid
+            if vis_img is not None:
+                print(f"[TopDownStream] vis_img after visualize_occupancy_grid shape: {vis_img.shape}")
+            else:
+                print("[TopDownStream] vis_img after visualize_occupancy_grid is None")
+
 
         if vis_img is None or len(vis_img.shape) < 2:
+            print("[TopDownStream] vis_img is invalid, creating default.") # DEBUG
             vis_img = create_default_depth_image(width=320, height=240)
         elif len(vis_img.shape) == 2 or (len(vis_img.shape) == 3 and vis_img.shape[2] == 1):
             vis_img = cv2.cvtColor(vis_img, cv2.COLOR_GRAY2BGR)
-
+        
         # 元のサイズに戻す (例: 320x240)
         # visualize_occupancy_grid が返す画像のサイズは (grid_h * scale, grid_w * scale, 3)
         # これを固定サイズにリサイズする
