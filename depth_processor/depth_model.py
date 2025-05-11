@@ -198,6 +198,7 @@ class DepthProcessor:
     def compress_depth_to_grid(self, depth_map, grid_size=(16, 12)):
         """
         深度マップを指定されたグリッドサイズに圧縮します。
+        OpenCVのresizeを利用して高速化。
 
         Args:
             depth_map (numpy.ndarray): 入力深度マップ (H, W) または (1, H, W, 1)
@@ -222,48 +223,38 @@ class DepthProcessor:
                 logger.error(f"Unsupported depth_map shape: {depth_map.shape}")
                 return None
             
-            # NaNやInfをチェックして置換 (圧縮前に実施)
-            depth_feature = np.nan_to_num(depth_feature, nan=0.0, posinf=0.0, neginf=0.0) # 無効値は0として扱う
-
-            original_h, original_w = depth_feature.shape
             grid_rows, grid_cols = grid_size
-
             if grid_rows <= 0 or grid_cols <= 0:
                 logger.error(f"Invalid grid_size: {grid_size}. Dimensions must be positive.")
                 return None
 
-            compressed_grid = np.zeros(grid_size, dtype=np.float32)
+            # NaNやInfをチェックして置換 (圧縮前に実施)
+            # 無効値は0として扱い、後の処理で1e-5以下の値としてフィルタリングされる
+            depth_feature = np.nan_to_num(depth_feature, nan=0.0, posinf=0.0, neginf=0.0)
 
-            cell_h = original_h / grid_rows
-            cell_w = original_w / grid_cols
+            # 有効な深度値のマスクを作成 (1e-5より大きい値)
+            value_mask = (depth_feature > 1e-5).astype(np.float32)
+            
+            # 有効な深度値のみを含むマップを作成 (他は0)
+            depth_for_sum = depth_feature * value_mask
 
-            for r in range(grid_rows):
-                for c in range(grid_cols):
-                    y_start = int(r * cell_h)
-                    y_end = int((r + 1) * cell_h)
-                    x_start = int(c * cell_w)
-                    x_end = int((c + 1) * cell_w)
+            # cv2.resizeのdsizeは (width, height) なので (grid_cols, grid_rows) を指定
+            target_cv_size = (grid_cols, grid_rows)
 
-                    # 範囲が画像サイズを超えないようにクリップ
-                    y_start = np.clip(y_start, 0, original_h)
-                    y_end = np.clip(y_end, 0, original_h)
-                    x_start = np.clip(x_start, 0, original_w)
-                    x_end = np.clip(x_end, 0, original_w)
-                    
-                    if y_start >= y_end or x_start >= x_end:
-                        # セルのサイズが0または負になる場合 (グリッドが細かすぎるなど)
-                        compressed_grid[r, c] = 0 # または他の適切なデフォルト値
-                        continue
+            # 有効深度値の合計を各セルで計算 (スケーリングされた値)
+            sum_resized = cv2.resize(depth_for_sum, target_cv_size, interpolation=cv2.INTER_AREA)
+            
+            # 有効深度値の数を各セルで計算 (スケーリングされた値)
+            count_resized = cv2.resize(value_mask, target_cv_size, interpolation=cv2.INTER_AREA)
 
-                    cell_depth_values = depth_feature[y_start:y_end, x_start:x_end]
-                    
-                    # 有効な深度値のみを対象とする (0より大きい値)
-                    valid_depths = cell_depth_values[cell_depth_values > 1e-5] # 小さな閾値より大きいもの
-                    
-                    if valid_depths.size > 0:
-                        compressed_grid[r, c] = np.mean(valid_depths)
-                    else:
-                        compressed_grid[r, c] = 0 # 有効な深度がない場合は0（または他の適切な値）
+            # 平均値を計算
+            compressed_grid = np.zeros((grid_rows, grid_cols), dtype=np.float32)
+            
+            # count_resizedが非常に小さい（ほぼ0）場合は除算を避ける
+            # これは、元のセルに有効な深度値が全くなかった場合に相当
+            valid_counts_mask = count_resized > 1e-6 # 小さな閾値
+
+            compressed_grid[valid_counts_mask] = sum_resized[valid_counts_mask] / count_resized[valid_counts_mask]
             
             return compressed_grid
 
