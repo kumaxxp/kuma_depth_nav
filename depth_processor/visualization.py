@@ -18,6 +18,16 @@ if not logger.hasHandlers():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 # --- ここまで追加 ---
+
+def create_depth_visualization(depth_map, original_shape, add_colorbar=True):
+    """深度マップの可視化を行う"""
+    try:
+        if depth_map is None or depth_map.size == 0:
+            logger.warning("Empty depth map received for visualization")
+            return create_default_depth_image(
+                640 if original_shape is None else original_shape[1],
+                480 if original_shape is None else original_shape[0]
+            )
             
         # 深度マップの形状をログ出力
         logger.debug(f"Visualizing depth map with shape: {depth_map.shape}")
@@ -71,7 +81,7 @@ if not logger.hasHandlers():
             return cv2.resize(depth_colored, (original_shape[1], original_shape[0]))
             
         return depth_colored
-        
+            
     except Exception as e:
         logger.error(f"Error in create_depth_visualization: {e}")
         import traceback
