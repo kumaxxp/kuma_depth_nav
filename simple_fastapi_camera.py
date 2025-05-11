@@ -474,7 +474,7 @@ def get_top_down_view_stream():
     first_frame = True
     
     # 設定パラメータ
-    # scaling_factor は convert_to_absolute_depth を使わないため不要に
+    scaling_factor = 15.0  # ★ 深度スケーリング係数を再度有効化
     grid_resolution = 0.1  # グリッドの解像度（メートル/セル）
     grid_width = 100       # グリッドの幅（セル数）
     grid_height = 100      # グリッドの高さ（セル数）
@@ -513,11 +513,12 @@ def get_top_down_view_stream():
             # デバッグ情報を出力
             print(f"圧縮グリッド形状: {current_grid_data.shape}, 元の深度マップ形状参考: ({original_h}, {original_w})")
             
-            # 1. (変更) 圧縮グリッドデータから3D点群を生成
-            # current_grid_data は既に実スケールの深度値を含んでいると仮定
-            # convert_to_absolute_depth は不要
+            # ★ 1. 圧縮グリッドデータを絶対深度に変換
+            absolute_depth_grid = convert_to_absolute_depth(current_grid_data, scaling_factor)
+            
+            # 2. (変更) 絶対深度グリッドデータから3D点群を生成
             points = depth_to_point_cloud(
-                current_grid_data,
+                absolute_depth_grid, # ★ 変換後のグリッドを使用
                 fx=FX, fy=FY, cx=CX, cy=CY,
                 original_height=original_h,
                 original_width=original_w,
@@ -533,14 +534,14 @@ def get_top_down_view_stream():
                 print("警告: 生成された点群が空です")
                 occupancy_grid = np.zeros((grid_height, grid_width), dtype=np.uint8)
             else:
-                # 2. 点群から天頂視点の占有グリッドを生成 (変更なし)
+                # 3. 点群から天頂視点の占有グリッドを生成 (変更なし)
                 occupancy_grid = create_top_down_occupancy_grid(points, 
                                                                grid_resolution, 
                                                                grid_width, 
                                                                grid_height, 
                                                                height_threshold)
             
-            # 3. 占有グリッドを可視化 (変更なし)
+            # 4. 占有グリッドを可視化 (変更なし)
             top_down_view = visualize_occupancy_grid(occupancy_grid)
             
             # 処理時間の測定終了
