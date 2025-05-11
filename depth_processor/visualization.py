@@ -144,20 +144,23 @@ def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=N
         グリッド可視化画像、またはタプル (画像, グリッド深度マップ)
     """
     rows, cols = grid_size
+    logger.debug(f"[GRID_VIS] Entered create_depth_grid_visualization. depth_map shape: {depth_map.shape if depth_map is not None else 'None'}, grid_size: {grid_size}")
 
     try:
         if depth_map is None or depth_map.size == 0:
-            logger.warning("Empty depth map received for visualization")
+            logger.warning("[GRID_VIS] Empty depth map received.")
             if return_grid_data:
                 return create_default_depth_image(), None
             return create_default_depth_image()
             
+        logger.debug("[GRID_VIS] Calling depth_processor.compress_depth_to_grid...")
         # DepthProcessorを使用して深度マップをグリッドに圧縮
         depth_grid_map = depth_processor.compress_depth_to_grid(depth_map, grid_size=grid_size)
+        logger.debug(f"[GRID_VIS] compress_depth_to_grid returned. depth_grid_map shape: {depth_grid_map.shape if depth_grid_map is not None else 'None'}")
         rows, cols = grid_size # grid_sizeタプルのアンパックを修正
 
         if depth_grid_map is None or depth_grid_map.size == 0:
-            logger.warning("Failed to compress depth map to grid.")
+            logger.warning("[GRID_VIS] Failed to compress depth map to grid or got empty grid.")
             if return_grid_data:
                 return create_default_depth_image(), None
             return create_default_depth_image()
@@ -231,11 +234,13 @@ def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=N
             cv2.line(output, (x, 0), (x, rows * cell_size), (50, 50, 50), 1)
 
         if return_grid_data:
+            logger.debug("[GRID_VIS] Returning image and depth_grid_map.")
             return output, depth_grid_map
+        logger.debug("[GRID_VIS] Returning image only.")
         return output  # 拡大されたグリッド画像のみ返す
         
     except Exception as e:
-        logger.error(f"Error in create_depth_grid_visualization: {e}")
+        logger.error(f"[GRID_VIS] Error in create_depth_grid_visualization: {e}")
         import traceback
         logger.error(traceback.format_exc())
         # エラー時はデフォルト画像を返す
