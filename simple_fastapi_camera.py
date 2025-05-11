@@ -66,6 +66,15 @@ last_inference_time = 0
 INFERENCE_INTERVAL = 0.08
 GRID_COMPRESSION_SIZE = (12, 16) # グリッド圧縮サイズ (rows, cols)
 
+# カメラ内部パラメータ (仮の値 - 実際にはキャリブレーションで取得)
+# raw_depth_map (256x384) に対応する値を想定
+ORIGINAL_DEPTH_HEIGHT = 256
+ORIGINAL_DEPTH_WIDTH = 384
+FX = 332.5  # 例: 384 / (2 * tan(60deg_hfov / 2))
+FY = 309.0  # 例: 256 / (2 * tan(45deg_vfov / 2))
+CX = ORIGINAL_DEPTH_WIDTH / 2.0
+CY = ORIGINAL_DEPTH_HEIGHT / 2.0
+
 # カメラキャプチャ専用スレッド（修正）
 def camera_capture_thread():
     global latest_camera_frame, frame_timestamp
@@ -465,41 +474,57 @@ def get_top_down_view_stream():
     first_frame = True
     
     # 設定パラメータ
-    scaling_factor = 15.0  # 深度スケーリング係数 (README.mdに基づく)
+    # scaling_factor は convert_to_absolute_depth を使わないため不要に
     grid_resolution = 0.1  # グリッドの解像度（メートル/セル）
     grid_width = 100       # グリッドの幅（セル数）
     grid_height = 100      # グリッドの高さ（セル数）
     height_threshold = 0.3 # 通行可能と判定する高さの閾値（メートル）
     
     while True:
-        # 共有メモリからカメラフレームと深度マップを取得
+        current_grid_data = None
+        original_map_shape_for_grid = None # (H, W)
+
         with depth_map_lock:
-            if latest_depth_map is None or latest_camera_frame is None:
-                time.sleep(0.01)
-                continue
-            current_depth_map = latest_depth_map.copy()
-            current_frame = latest_camera_frame.copy()  # 現在のフレームも取得
+            if latest_depth_grid is not None and latest_depth_map is not None:
+                current_grid_data = latest_depth_grid.copy()
+                # latest_depth_map は圧縮前の形状情報を得るために使用
+                # (1, H, W, 1) or (H, W) or (H, W, 1)
+                if latest_depth_map.ndim == 4 and latest_depth_map.shape[0] == 1:
+                    original_map_shape_for_grid = latest_depth_map.shape[1:3] # (H, W)
+                elif latest_depth_map.ndim == 3 and latest_depth_map.shape[2] == 1:
+                    original_map_shape_for_grid = latest_depth_map.shape[:2] # (H, W)
+                elif latest_depth_map.ndim == 2:
+                    original_map_shape_for_grid = latest_depth_map.shape # (H, W)
+                else:
+                    print(f"警告: latest_depth_map の形状 {latest_depth_map.shape} が予期せぬ形式です。")
+                    original_map_shape_for_grid = (ORIGINAL_DEPTH_HEIGHT, ORIGINAL_DEPTH_WIDTH) # フォールバック
+            # latest_camera_frame はここでは直接使用しない
+
+        if current_grid_data is None or original_map_shape_for_grid is None:
+            time.sleep(0.01) # データがまだない場合は待機
+            continue
         
         # 処理時間の計測を開始
         start_time = time.perf_counter()
         
         try:
-            # 深度マップの形状を確認して調整
-            if len(current_depth_map.shape) == 4:  # (1, H, W, 1) 形式
-                depth_map_2d = current_depth_map.reshape(current_depth_map.shape[1:3])
-            elif len(current_depth_map.shape) == 3:  # (H, W, 1) 形式
-                depth_map_2d = current_depth_map.reshape(current_depth_map.shape[:2])
-            else:
-                depth_map_2d = current_depth_map  # すでに2D
+            original_h, original_w = original_map_shape_for_grid
             
             # デバッグ情報を出力
-            print(f"深度マップ形状: {current_depth_map.shape} -> 変換後: {depth_map_2d.shape}")
+            print(f"圧縮グリッド形状: {current_grid_data.shape}, 元の深度マップ形状参考: ({original_h}, {original_w})")
             
-            # 1. 相対深度マップを絶対深度マップ（メートル単位）に変換
-            absolute_depth = convert_to_absolute_depth(depth_map_2d, scaling_factor)
-            
-            # 2. 深度マップから3D点群を生成
-            points = depth_to_point_cloud(absolute_depth)
+            # 1. (変更) 圧縮グリッドデータから3D点群を生成
+            # current_grid_data は既に実スケールの深度値を含んでいると仮定
+            # convert_to_absolute_depth は不要
+            points = depth_to_point_cloud(
+                current_grid_data,
+                fx=FX, fy=FY, cx=CX, cy=CY,
+                original_height=original_h,
+                original_width=original_w,
+                is_grid_data=True,
+                grid_rows=GRID_COMPRESSION_SIZE[0],
+                grid_cols=GRID_COMPRESSION_SIZE[1]
+            )
             
             # 点群データの情報をログ出力
             print(f"点群データサイズ: {points.shape if hasattr(points, 'shape') else 'None'}")
@@ -508,14 +533,14 @@ def get_top_down_view_stream():
                 print("警告: 生成された点群が空です")
                 occupancy_grid = np.zeros((grid_height, grid_width), dtype=np.uint8)
             else:
-                # 3. 点群から天頂視点の占有グリッドを生成
+                # 2. 点群から天頂視点の占有グリッドを生成 (変更なし)
                 occupancy_grid = create_top_down_occupancy_grid(points, 
                                                                grid_resolution, 
                                                                grid_width, 
                                                                grid_height, 
                                                                height_threshold)
             
-            # 4. 占有グリッドを可視化
+            # 3. 占有グリッドを可視化 (変更なし)
             top_down_view = visualize_occupancy_grid(occupancy_grid)
             
             # 処理時間の測定終了
