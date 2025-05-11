@@ -127,62 +127,38 @@ def depth_to_color(depth_normalized):
     # HSVからBGRへの変換
     return cv2.cvtColor(np.uint8([[[hue, saturation, value]]]), cv2.COLOR_HSV2BGR)[0][0]
 
-def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=None, grid_size=(16, 12), 
-                                   max_distance=10.0, cell_size=60, return_grid_data=False):
+def create_depth_grid_visualization(depth_grid_map, absolute_depth=None, cell_size=60): # 引数変更
     """
-    深度マップのグリッド可視化を行う
+    圧縮済みの深度グリッドマップの可視化を行う
     
     Args:
-        depth_processor: DepthProcessorのインスタンス
-        depth_map: 深度マップ
-        absolute_depth: 絶対深度マップ（オプション）
-        grid_size: グリッドサイズ (cols, rows)
-        max_distance: 最大距離
+        depth_grid_map: 圧縮済みの深度グリッドマップ (rows, cols)
+        absolute_depth: 絶対深度マップ（オプション、現在はグリッドセルごとの絶対深度表示に使用）
         cell_size: セルサイズ（ピクセル）
-        return_grid_data: グリッド深度データも返すかどうか
 
     Returns:
-        グリッド可視化画像、またはタプル (画像, グリッド深度マップ)
+        グリッド可視化画像
     """
-    rows, cols = grid_size
-    # logger.debug(f"[GRID_VIS] Entered create_depth_grid_visualization. depth_map shape: {depth_map.shape if depth_map is not None else 'None'}, grid_size: {grid_size}")
+    if depth_grid_map is None or depth_grid_map.size == 0:
+        logger.warning("Empty depth_grid_map received for visualization.")
+        return create_default_depth_image() # デフォルト画像を返す
+
+    rows, cols = depth_grid_map.shape # grid_size は depth_grid_map.shape から取得
 
     try:
-        if depth_map is None or depth_map.size == 0:
-            logger.warning("Empty depth map received for grid visualization.") # [GRID_VIS] プレフィックスを削除
-            if return_grid_data:
-                return create_default_depth_image(), None
-            return create_default_depth_image()
-            
-        # logger.debug("[GRID_VIS] Calling depth_processor.compress_depth_to_grid...")
-        # DepthProcessorを使用して深度マップをグリッドに圧縮
-        depth_grid_map = depth_processor.compress_depth_to_grid(depth_map, grid_size=grid_size)
-        # logger.debug(f"[GRID_VIS] compress_depth_to_grid returned. depth_grid_map shape: {depth_grid_map.shape if depth_grid_map is not None else 'None'}")
-        rows, cols = grid_size # grid_sizeタプルのアンパックを修正
-
-        if depth_grid_map is None or depth_grid_map.size == 0:
-            logger.warning("Failed to compress depth map to grid or got empty grid.") # [GRID_VIS] プレフィックスを削除
-            if return_grid_data:
-                return create_default_depth_image(), None
-            return create_default_depth_image()
-
-        # depth_grid_map を depth_conv として使用 (以前のdepth_convの計算は不要になった)
+        # depth_grid_map を depth_conv として使用
         depth_conv = depth_grid_map
 
-        # 以下、可視化用の処理 (変更なし)
-        # depth_convを正規化（無効値を除外）
+        # 以下、可視化用の処理
         valid_depth = depth_conv[depth_conv > 0.01]
         if len(valid_depth) > 0:
-            min_depth = np.percentile(valid_depth, 5)  # 外れ値を除外
-            max_depth = np.percentile(valid_depth, 95) # 外れ値を除外
+            min_depth = np.percentile(valid_depth, 5)
+            max_depth = np.percentile(valid_depth, 95)
         else:
-            logger.warning("No valid depth values found in depth_conv for grid visualization") # メッセージを少し変更
+            logger.warning("No valid depth values found in depth_conv for grid visualization")
             min_depth = 0.1
             max_depth = 0.9
 
-        # logger.debug(f"Using depth range for normalization: {min_depth:.4f} to {max_depth:.4f}") # このデバッグログは残しても良いかもしれないが、一旦削除
-
-        # 正規化して0-1範囲にする
         normalized = np.zeros_like(depth_conv, dtype=np.float32)
         valid_mask = depth_conv > 0.01
         if np.any(valid_mask) and (max_depth > min_depth):
@@ -191,60 +167,44 @@ def create_depth_grid_visualization(depth_processor, depth_map, absolute_depth=N
                 0, 1
             )
             
-        # colormap適用
         depth_colored = cv2.applyColorMap(
             (normalized * 255).astype(np.uint8), 
             cv2.COLORMAP_MAGMA
         )
         
-        # 小さな8×6の画像から大きなグリッド表示を作成
         output = np.zeros((rows * cell_size, cols * cell_size, 3), dtype=np.uint8)
 
-        # 各セルを描画
         for i in range(rows):
             for j in range(cols):
-                # セルの位置
-                y_start = i * cell_size
-                y_end = (i + 1) * cell_size
-                x_start = j * cell_size
-                x_end = (j + 1) * cell_size
-                
-                # セルの色を取得
+                y_start, y_end = i * cell_size, (i + 1) * cell_size
+                x_start, x_end = j * cell_size, (j + 1) * cell_size
                 cell_color = depth_colored[i, j]
-                
-                # セルを描画
                 output[y_start:y_end, x_start:x_end] = cell_color
                 
                 # セルに深度値を表示（絶対深度がある場合）
-                if absolute_depth is not None:
-                    # 深度値のテキスト
-                    depth_val = 15.0 / depth_conv[i, j]  # 相対深度から絶対深度に変換
-                    text = f"{depth_val:.1f}m"
-                    
-                    # テキスト表示
-                    cv2.putText(output, text, (x_start + 5, y_start + 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # 注意: absolute_depth が渡された場合、それがグリッドセルに対応したデータであることを期待します。
+                # もし元の高解像度 absolute_depth の場合、別途圧縮処理が必要です。
+                # ここでは、depth_conv（圧縮済みの相対深度）から簡易的に絶対深度を計算して表示する例のままにします。
+                if absolute_depth is not None: 
+                    if depth_conv[i, j] > 1e-5: # ゼロ除算を避ける
+                        # この変換は仮のものです。実際の絶対深度の計算方法に合わせてください。
+                        depth_val = 15.0 / depth_conv[i, j] 
+                        text = f"{depth_val:.1f}m"
+                        cv2.putText(output, text, (x_start + 5, y_start + 30), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         # グリッド線を描画
-        for i in range(rows+1):
+        for i in range(rows + 1):
             y = i * cell_size
             cv2.line(output, (0, y), (cols * cell_size, y), (50, 50, 50), 1)
-            
-        for j in range(cols+1):
+        for j in range(cols + 1):
             x = j * cell_size
             cv2.line(output, (x, 0), (x, rows * cell_size), (50, 50, 50), 1)
 
-        if return_grid_data:
-            # logger.debug("[GRID_VIS] Returning image and depth_grid_map.")
-            return output, depth_grid_map
-        # logger.debug("[GRID_VIS] Returning image only.")
-        return output  # 拡大されたグリッド画像のみ返す
+        return output
         
     except Exception as e:
-        logger.error(f"Error in create_depth_grid_visualization: {e}") # [GRID_VIS] プレフィックスを削除
+        logger.error(f"Error in create_depth_grid_visualization: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        # エラー時はデフォルト画像を返す
-        if return_grid_data:
-            return create_default_depth_image(), None
         return create_default_depth_image()

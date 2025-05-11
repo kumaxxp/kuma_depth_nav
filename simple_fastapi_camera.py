@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 
 # Depth Anything用
 from depth_processor import DepthProcessor, create_depth_visualization, create_depth_grid_visualization
+# ★ create_default_depth_image をインポート
+from depth_processor.visualization import create_default_depth_image
 # 天頂視点マップ用の関数をインポート
 from depth_processor import convert_to_absolute_depth, depth_to_point_cloud, create_top_down_occupancy_grid, visualize_occupancy_grid
 
@@ -56,11 +58,13 @@ depth_processor = DepthProcessor()
 
 # 共有メモリを拡張
 latest_depth_map = None
-latest_camera_frame = None  # 最新のカメラフレームを保存
-frame_timestamp = 0  # フレームのタイムスタンプ
-depth_map_lock = threading.Lock()
+latest_camera_frame = None
+latest_depth_grid = None # ★追加: 圧縮済み深度グリッド用
+frame_timestamp = 0
+depth_map_lock = threading.Lock() # latest_depth_map, latest_camera_frame, latest_depth_grid の保護用
 last_inference_time = 0
-INFERENCE_INTERVAL = 0.08  # 0.1→0.08秒に短縮（約12.5FPS）
+INFERENCE_INTERVAL = 0.08
+GRID_COMPRESSION_SIZE = (12, 16) # グリッド圧縮サイズ (rows, cols)
 
 # カメラキャプチャ専用スレッド（修正）
 def camera_capture_thread():
@@ -99,6 +103,7 @@ def camera_capture_thread():
 # 処理時間計測用
 camera_times = deque(maxlen=1000)
 inference_times = deque(maxlen=1000)
+compression_times = deque(maxlen=1000) # ★追加: 圧縮時間用
 visualization_times = deque(maxlen=1000)
 encoding_times = deque(maxlen=1000)
 
@@ -108,7 +113,8 @@ fps_stats = {
     "depth": deque(maxlen=30),
     "grid": deque(maxlen=30),
     "inference": deque(maxlen=30),
-    "top_down": deque(maxlen=30)  # 天頂視点マップ用
+    "compression": deque(maxlen=30), # ★追加: 圧縮FPS用
+    "top_down": deque(maxlen=30)
 }
 last_frame_times = {
     "camera": 0,
@@ -124,6 +130,8 @@ def log_processing_times():
             print(f"[Camera] Avg: {np.mean(camera_times):.4f}s, Max: {np.max(camera_times):.4f}s, Min: {np.min(camera_times):.4f}s")
         if inference_times:
             print(f"[Inference] Avg: {np.mean(inference_times):.4f}s, Max: {np.max(inference_times):.4f}s, Min: {np.min(inference_times):.4f}s")
+        if compression_times: # ★追加
+            print(f"[Compression] Avg: {np.mean(compression_times):.4f}s, Max: {np.max(compression_times):.4f}s, Min: {np.min(compression_times):.4f}s")
         if visualization_times:
             print(f"[Visualization] Avg: {np.mean(visualization_times):.4f}s, Max: {np.max(visualization_times):.4f}s, Min: {np.min(visualization_times):.4f}s")
         if encoding_times:
@@ -133,43 +141,50 @@ threading.Thread(target=log_processing_times, daemon=True).start()
 
 # 推論専用の関数を追加
 def inference_thread():
-    global latest_depth_map, last_inference_time
+    global latest_depth_map, last_inference_time, latest_depth_grid # ★ latest_depth_grid をグローバル変数として追加
     while True:
         current_time = time.time()
-        # 前回の推論から一定時間経過した場合のみ推論実行
         if current_time - last_inference_time > INFERENCE_INTERVAL:
-            # 共有メモリからカメラフレームを取得
             with depth_map_lock:
                 if latest_camera_frame is None:
                     time.sleep(0.01)
                     continue
-                frame = latest_camera_frame.copy()
-                capture_time = frame_timestamp
+                frame_for_inference = latest_camera_frame.copy()
+                current_capture_time = frame_timestamp
             
             # 推論用にリサイズ
-            small = cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA)
-            start_time = time.perf_counter()
-            depth_map, _ = depth_processor.predict(small)
-            inference_time = time.perf_counter() - start_time
-            inference_times.append(inference_time)
+            small_frame = cv2.resize(frame_for_inference, (128, 128), interpolation=cv2.INTER_AREA)
             
-            # FPS計算
-            now = time.time()
-            if last_inference_time > 0:
-                fps = 1.0 / (now - last_inference_time)
-                fps_stats["inference"].append(fps)
+            # 深度推定
+            start_time_inference = time.perf_counter()
+            raw_depth_map, _ = depth_processor.predict(small_frame)
+            inference_duration = time.perf_counter() - start_time_inference
+            inference_times.append(inference_duration)
             
-            # ロックを取得して共有メモリを更新
+            # 深度マップ圧縮
+            compressed_grid = None
+            compression_duration = 0
+            if raw_depth_map is not None:
+                start_time_compression = time.perf_counter()
+                compressed_grid = depth_processor.compress_depth_to_grid(raw_depth_map, grid_size=GRID_COMPRESSION_SIZE)
+                compression_duration = time.perf_counter() - start_time_compression
+                compression_times.append(compression_duration)
+                if compressed_grid is None:
+                    print("[Thread] compress_depth_to_grid returned None.") 
+            else:
+                print("[Thread] depth_processor.predict returned None, skipping compression.")
+
+            processing_end_time = time.time()
+            
             with depth_map_lock:
-                latest_depth_map = depth_map
-                last_inference_time = now
+                latest_depth_map = raw_depth_map # 元の深度マップも保持（他の用途があるかもしれないため）
+                latest_depth_grid = compressed_grid # ★圧縮グリッドを保存
+                last_inference_time = processing_end_time # ★処理完了時刻を更新
             
-            # 遅延を計算して表示
-            delay = now - capture_time
-            print(f"[Thread] Inference completed in {inference_time:.4f}s, Delay: {delay*1000:.1f}ms")
+            delay = processing_end_time - current_capture_time
+            print(f"[Thread] Inference: {inference_duration:.4f}s, Compression: {compression_duration:.4f}s, Total: {(inference_duration + compression_duration):.4f}s, Delay: {delay*1000:.1f}ms")
         else:
-            # 推論間隔が来るまで少し待機
-            time.sleep(0.01)  # 0.05→0.01に短縮して応答性を向上
+            time.sleep(0.01) # 推論間隔までの待機
 
 # カメラスレッド起動
 threading.Thread(target=camera_capture_thread, daemon=True).start()
@@ -224,24 +239,27 @@ def get_depth_stream():
 
 def get_depth_grid_stream():
     while True:
-        # 共有メモリからカメラフレームと深度マップを取得
+        current_compressed_grid_to_visualize = None
         with depth_map_lock:
-            if latest_depth_map is None or latest_camera_frame is None:
-                time.sleep(0.01)
-                continue
-            current_depth_map = latest_depth_map.copy()
-            current_frame = latest_camera_frame.copy()  # 現在のフレームも取得
+            if latest_depth_grid is not None:
+                current_compressed_grid_to_visualize = latest_depth_grid.copy()
+            # latest_camera_frame はここでは不要
 
-        # グリッドの可視化
-        start_time = time.perf_counter()
-        # depth_processor インスタンスを渡すように修正
-        grid_img, depth_grid_map = create_depth_grid_visualization(depth_processor, current_depth_map, grid_size=(12, 16), cell_size=20, return_grid_data=True)
+        if current_compressed_grid_to_visualize is None:
+            time.sleep(0.01) # グリッドデータがまだない場合は待機
+            continue
+
+        start_time_vis = time.perf_counter()
+        # ★ create_depth_grid_visualization に圧縮済みグリッドとcell_sizeのみを渡す
+        grid_img = create_depth_grid_visualization(current_compressed_grid_to_visualize, cell_size=20) 
+        
         if grid_img is None or len(grid_img.shape) < 2:
-            grid_img = 128 * np.ones((240, 320, 3), dtype=np.uint8)
+            grid_img = create_default_depth_image(width=320, height=240) # フォールバック
         elif len(grid_img.shape) == 2 or (len(grid_img.shape) == 3 and grid_img.shape[2] == 1):
             grid_img = cv2.cvtColor(grid_img, cv2.COLOR_GRAY2BGR)
+        
         grid_img = cv2.resize(grid_img, (320, 240), interpolation=cv2.INTER_NEAREST)
-        visualization_times.append(time.perf_counter() - start_time)
+        visualization_times.append(time.perf_counter() - start_time_vis)
 
         # FPS計算とテキスト表示
         now = time.time()
